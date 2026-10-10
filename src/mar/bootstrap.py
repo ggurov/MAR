@@ -100,8 +100,10 @@ def render_prompt(reg: Registry, *, custom_path: Path | None = None) -> str:
         "## API keys",
         "",
         "This prompt never contains API keys.",
-        "Run `mar omp-sync` to pull the credentials for these providers from",
-        "MAR into this omp install (agent.db), then restart omp.",
+        "On the MAR machine: run `mar omp-sync` to pull the credentials for",
+        "these providers into this omp install (agent.db), then restart omp.",
+        "On a machine WITHOUT MAR: run `mar export` there and paste the",
+        "output block here — it writes omp's .env directly, no install.",
     ]
     if custom_path is not None:
         custom_text = Path(custom_path).read_text(encoding="utf-8")

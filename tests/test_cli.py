@@ -177,6 +177,7 @@ class TestPrompt:
         out = capsys.readouterr().out
         assert "zai" in out
         assert "glm-5.3-flash" in out
+        assert "mar export" in out
         assert FAKE_KEY not in out
 
     def test_prompt_empty_registry_is_error(self, reg_path):
@@ -194,6 +195,84 @@ class TestPrompt:
         out_path = tmp_path / "prompt.md"
         assert run(reg_path, "prompt", "--output", str(out_path)) == 0
         assert "zai" in out_path.read_text(encoding="utf-8")
+
+
+class TestExport:
+    def test_export_powershell_contains_all_keys(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        run(reg_path, "add", "cursor-grok", "--key", "cursor-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        assert "ZAI_API_KEY=zai-key-1234567890" in out
+        assert "CURSOR_ACCESS_TOKEN=cursor-key-1234567890" in out
+        assert "@'" in out and "Set-Content" in out
+        assert "$env:USERPROFILE\\.omp\\agent\\.env" in out
+        assert "omp usage" in out
+
+    def test_export_bash_heredoc(self, reg_path, capsys):
+        run(reg_path, "add", "openrouter", "--key", "or-key-123456789012")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        out = capsys.readouterr().out
+        assert "<<'MAR_EOF'" in out
+        assert "OPENROUTER_API_KEY=or-key-123456789012" in out
+
+    def test_export_skips_oauth_and_unknown_and_envless(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        # hand-edit registry to hold an oauth sub and an unknown provider
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        data["subscriptions"].append(
+            {
+                "provider": "claude",
+                "auth_method": "oauth",
+                "key": None,
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+            }
+        )
+        data["subscriptions"].append(
+            {
+                "provider": "ghost-labs",
+                "auth_method": "api_key",
+                "key": "ghost-key-1234567890",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+            }
+        )
+        reg_path.write_text(json.dumps(data), encoding="utf-8")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        assert "ANTHROPIC_API_KEY" not in out
+        assert "ghost-key" not in out
+        assert "no api key stored" in out
+        assert "unknown provider" in out
+
+    def test_export_antigravity_envless_note(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        run(reg_path, "add", "antigravity", "--key", "ag-key-123456789012")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        assert "no env route" in out
+        assert "/login google-antigravity" in out
+        assert "ag-key-123456789012" not in out  # never leaks the unexportable key
+
+    def test_export_empty_registry_is_error(self, reg_path):
+        assert run(reg_path, "export") == 1
+
+    def test_export_output_writes_file(self, reg_path, tmp_path):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        out_path = tmp_path / "pastable.ps1"
+        assert run(reg_path, "export", "--output", str(out_path)) == 0
+        assert "ZAI_API_KEY=zai-key-1234567890" in out_path.read_text(encoding="utf-8")
 
 
 class TestTopLevel:

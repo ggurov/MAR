@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -77,6 +78,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_prompt.add_argument("--output", default=None, metavar="PATH", help="write prompt to file instead of stdout")
     p_prompt.add_argument("--registry", default=None, metavar="PATH")
     p_prompt.set_defaults(func=_cmd_prompt)
+
+    p_exp = sub.add_parser(
+        "export",
+        help="emit a zero-install pastable that configures omp on another machine",
+    )
+    p_exp.add_argument(
+        "--shell", choices=("powershell", "bash"), default="powershell",
+        help="target shell for the pastable (default: powershell)",
+    )
+    p_exp.add_argument("--output", default=None, metavar="PATH", help="write pastable to file instead of stdout")
+    p_exp.add_argument("--registry", default=None, metavar="PATH")
+    p_exp.set_defaults(func=_cmd_export)
 
     return parser
 
@@ -209,6 +222,71 @@ def _cmd_prompt(args: argparse.Namespace) -> int:
         print(f"wrote {args.output}")
     else:
         print(text)
+    return 0
+
+
+def _cmd_export(args: argparse.Namespace) -> int:
+    reg = _load(args.registry)
+    pairs: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    for sub in reg.active():
+        if sub.auth_method != "api_key" or not sub.key:
+            skipped.append(f"#   {sub.provider}: no api key stored")
+            continue
+        try:
+            provider = providers.get(sub.provider)
+        except KeyError:
+            skipped.append(f"#   {sub.provider}: unknown provider (not in catalog)")
+            continue
+        if not provider.export_env_var:
+            skipped.append(
+                f"#   {sub.provider}: no env route in omp; run /login {provider.omp_provider_id} there"
+            )
+            continue
+        pairs.append((provider.export_env_var, sub.key))
+    if not pairs:
+        return _err("nothing to export: no active subscriptions with exportable api keys")
+    lines = [f"{var}={key}" for var, key in pairs]
+    if args.shell == "powershell":
+        body = "\n".join(
+            [
+                "# MAR portable setup — paste this whole block into PowerShell on the target machine.",
+                "# It writes omp's agent .env (contains SECRETS; omp deletes nothing, omp reads it at startup).",
+                'New-Item -ItemType Directory -Force "$env:USERPROFILE\\.omp\\agent" | Out-Null',
+                "@'",
+                *lines,
+                "'@ | Set-Content \"$env:USERPROFILE\\.omp\\agent\\.env\" -Encoding ascii",
+            ]
+        )
+    else:
+        body = "\n".join(
+            [
+                "# MAR portable setup — paste this whole block into bash on the target machine.",
+                "# It writes omp's agent .env (contains SECRETS; omp reads it at startup).",
+                "mkdir -p ~/.omp/agent",
+                "cat > ~/.omp/agent/.env <<'MAR_EOF'",
+                *lines,
+                "MAR_EOF",
+            ]
+        )
+    footer = [
+        "# Then verify and start:  omp usage    omp --yolo",
+        f"# Exported {len(pairs)} credential(s) from MAR ({args.shell}).",
+    ]
+    if skipped:
+        footer.append("# Not exportable:")
+        footer.extend(skipped)
+    text = "\n".join([body, *footer]) + "\n"
+    if args.output:
+        out_path = Path(args.output)
+        out_path.write_text(text, encoding="utf-8")
+        try:
+            os.chmod(out_path, 0o600)
+        except OSError:
+            pass
+        print(f"wrote {args.output} (contains keys; keep it safe)")
+    else:
+        print(text, end="")
     return 0
 
 

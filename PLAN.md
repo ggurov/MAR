@@ -51,6 +51,7 @@ graph LR
 | M7 | OAuth add-flows per provider | Each provider that supports OAuth gets an interactive add flow; research-gated per provider | planned |
 | M8 | Per-provider limit fetchers | Real endpoints researched and implemented one provider at a time (Codex usage, Anthropic admin usage, GitHub Copilot entitlements, …); until then `omp usage` already reports cline/opencode/zai quota windows | planned |
 | M9 | `mar doctor` | Catalog verification report: which omp provider ids are confirmed, which URLs resolve; also reconcile orphaned `.env` vars when a provider's credential route changes | planned |
+| M10 | `mar export` | Zero-install pastable (PowerShell/bash) writing omp's agent `.env` from the registry via omp's documented env routes; skips no-route/oauth providers with `/login` hints; `--output` writes 0600 | done |
 
 ## Slice ownership (for parallel agent work)
 

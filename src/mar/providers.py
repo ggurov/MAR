@@ -43,6 +43,12 @@ class Provider:
             via this environment variable (written to the agent dir's
             ``.env`` by ``mar omp-sync``) instead of a login-sourced
             agent.db row. Empty means agent.db credential row.
+        export_env_var: Environment variable omp recognizes for this
+            provider on ANY machine, used by ``mar export`` to build the
+            zero-install pastable. May differ from ``omp_env_var`` (the
+            sync route) — e.g. providers MAR syncs as agent.db rows still
+            have documented env aliases. Empty means the provider has no
+            env route (OAuth-only); export tells the user to ``/login``.
         default_model: Always None — the user picks the default at
             ``mar add`` time; the catalog never invents one.
         limits_kind: ``"api"`` (real fetcher exists) or ``"manual"``
@@ -60,6 +66,7 @@ class Provider:
     signup_url: str
     omp_provider_id: str
     omp_env_var: str
+    export_env_var: str
     default_model: str | None
     limits_kind: str
     verified: bool
@@ -76,6 +83,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://cursor.com/signup",
         omp_provider_id="cursor",
         omp_env_var="CURSOR_ACCESS_TOKEN",
+        export_env_var="CURSOR_ACCESS_TOKEN",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -94,6 +102,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://platform.openai.com/signup",
         omp_provider_id="openai-codex",
         omp_env_var="OPENAI_CODEX_OAUTH_TOKEN",
+        export_env_var="OPENAI_CODEX_OAUTH_TOKEN",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -108,6 +117,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://console.anthropic.com/",
         omp_provider_id="anthropic",
         omp_env_var="ANTHROPIC_API_KEY",
+        export_env_var="ANTHROPIC_API_KEY",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -122,6 +132,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://cline.bot",
         omp_provider_id="cline-pass",
         omp_env_var="",
+        export_env_var="CLINE_API_KEY",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -138,6 +149,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://opencode.ai",
         omp_provider_id="opencode-go",
         omp_env_var="",
+        export_env_var="OPENCODE_API_KEY",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -154,6 +166,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://z.ai",
         omp_provider_id="zai",
         omp_env_var="",
+        export_env_var="ZAI_API_KEY",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -170,6 +183,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://openrouter.ai/",
         omp_provider_id="openrouter",
         omp_env_var="",
+        export_env_var="OPENROUTER_API_KEY",
         default_model=None,
         limits_kind="api",
         verified=True,
@@ -188,6 +202,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://antigravity.google",
         omp_provider_id="google-antigravity",
         omp_env_var="",
+        export_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -202,6 +217,7 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://github.com/features/copilot",
         omp_provider_id="github-copilot",
         omp_env_var="COPILOT_GITHUB_TOKEN",
+        export_env_var="COPILOT_GITHUB_TOKEN",
         default_model=None,
         limits_kind="manual",
         verified=True,
