@@ -133,7 +133,7 @@ class TestLimits:
 
 
 class TestOmpSync:
-    def test_omp_sync_writes_verified_and_skips_unverified(self, reg_path, tmp_path, capsys):
+    def test_omp_sync_writes_db_rows_and_env_vars(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "agent"
         run(reg_path, "add", "zai", "--key", FAKE_KEY)
         run(reg_path, "add", "cursor-grok", "--key", "crsr_fake_1234567890")
@@ -141,12 +141,14 @@ class TestOmpSync:
         assert code == 0
         out = capsys.readouterr().out
         assert "written: zai" in out
-        assert "skipped: cursor-grok" in out and "unverified" in out
+        assert "written: cursor" in out
         with sqlite3.connect(agent_dir / "agent.db") as conn:
             rows = conn.execute(
                 "SELECT provider, credential_type, data FROM auth_credentials"
             ).fetchall()
         assert rows == [("zai", "api_key", '{"key":"' + FAKE_KEY + '"}')]
+        env = (agent_dir / ".env").read_text(encoding="utf-8")
+        assert env == "CURSOR_ACCESS_TOKEN=crsr_fake_1234567890\n"
 
     def test_omp_sync_sets_model_role(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "agent"

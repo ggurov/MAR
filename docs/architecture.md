@@ -44,8 +44,13 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
 
 ## omp integration contract
 
-**verified** — credential store is SQLite at `~/.omp/agent/agent.db`,
-table `auth_credentials`, live DDL:
+**verified** — the agent directory is resolved by omp via `PI_CODING_AGENT_DIR`
+(default `~/.omp/agent`). MAR honors the same variable in
+`omp.default_agent_dir()`, so `PI_CODING_AGENT_DIR=<dir> mar omp-sync`
+configures an isolated omp install — the basis of the end-to-end test below.
+
+Login-style credentials live in SQLite at `<agent_dir>/agent.db`, table
+`auth_credentials`, live DDL:
 
 ```sql
 CREATE TABLE auth_credentials (
@@ -76,6 +81,15 @@ MAR write semantics (`upsert_credential`):
 via `yaml.safe_load` → update `modelRoles` → `yaml.safe_dump(..., sort_keys=False)`.
 Accepted reformatting tradeoff: omp owns this file too and rewrites it
 (`setupVersion`); no comments were present in the inspected file.
+
+**verified** — env-var credential route: omp loads `<agent_dir>/.env` and treats
+`VAR=value` as an environment fallback for providers whose catalog entry
+declares one (e.g. `CURSOR_ACCESS_TOKEN` for the OAuth-first `cursor`
+provider). MAR's `omp.upsert_env_key()` replaces the first line for that var
+(`export ` prefix tolerated) and appends otherwise, preserving all other
+content. `bootstrap.sync` routes a provider to `.env` when its catalog entry
+has `omp_env_var` set, else to an `agent.db` login-style row (which ranks
+above env in omp's credential precedence).
 
 ## Provider catalog
 
@@ -131,3 +145,14 @@ into the registry and must not leak).
 - 2026-10-10: inspected live `~/.omp/agent/agent.db` (`auth_credentials`
   schema + rows) and `~/.omp/agent/config.yml` (`modelRoles`) — contracts
   above derive from that inspection, not from docs.
+- 2026-10-10: omp provider roster cross-checked (omp://providers.md,
+  omp 18.8.7): `openrouter`, `cursor`, `anthropic`, `openai-codex`,
+  `google-antigravity`, `github-copilot` are built-ins with the env vars
+  listed in docs/providers.md; `codebuddy` is not in the roster (user dropped
+  it from the catalog).
+- 2026-10-10: end-to-end proof in an isolated agent dir
+  (`PI_CODING_AGENT_DIR=<tmp>`): `mar omp-sync` from an empty dir →
+  `omp usage` returned live quota windows for cline-pass, opencode-go, and
+  zai; `omp models find` listed 568 openrouter and 123 cursor models;
+  `omp --model zai/glm-5.3-flash` completed a one-shot inference. No omp
+  code was modified — configuration only.

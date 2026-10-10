@@ -1,35 +1,44 @@
 # Provider catalog data
 
-The 10 lines below are the user's subscriptions, verbatim from
-`problem_statement.txt`. This file is the editorial source for
-`src/mar/providers.py`; keep both in sync.
+The 9 lines below are the user's subscriptions (problem statement minus
+codebuddy, dropped by the user). Editorial source for `src/mar/providers.py`;
+keep both in sync.
 
-Verification: `yes` = fact confirmed on this machine 2026-10-10 (live
-`~/.omp/agent/agent.db` rows or documented public API). `no` = best-known
-value, must be confirmed before MAR writes it anywhere (M9 `mar doctor`
-promotes/demotes these).
+Verification: every omp id/env var below was confirmed against omp's official
+provider roster (omp://providers.md, 2026-10-10); `cline`, `opencode`, `zai`
+ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
+`verified=True`; `unverified()` returns empty.
 
-| # | id | display | auth | omp_provider_id | key_url | limits_url | default_model | limits_kind | verified |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | cursor-grok | Cursor / Grok | api_key | (verify) | https://cursor.com/settings | https://cursor.com/usage | (user picks) | manual | no |
-| 2 | codex | OpenAI Codex | api_key | (verify) | https://platform.openai.com/api-keys | https://platform.openai.com/usage | (user picks) | manual | no |
-| 3 | claude | Anthropic Claude | api_key | (verify) | https://console.anthropic.com/settings/keys | https://console.anthropic.com/settings/usage | (user picks) | manual | no |
-| 4 | cline | Cline | api_key | cline-pass | https://cline.bot | (verify) | (user picks) | manual | id yes |
-| 5 | opencode | OpenCode | api_key | opencode-go | https://opencode.ai | (verify) | (user picks) | manual | id yes |
-| 6 | zai | Z.ai | api_key | zai | (verify) | (verify) | (user picks) | manual | id yes |
-| 7 | codebuddy | CodeBuddy | api_key | (verify) | https://www.codebuddy.ai | (verify) | (user picks) | manual | no |
-| 8 | openrouter | OpenRouter | api_key | (verify) | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | (user picks) | api | no (limits API yes) |
-| 9 | antigravity | Google Antigravity | api_key | (verify) | https://antigravity.google | (verify) | (user picks) | manual | no |
-| 10 | copilot | GitHub Copilot | api_key | (verify) | https://github.com/settings/tokens | https://github.com/settings/copilot | (user picks) | manual | no |
+| # | id | display | omp_provider_id | credential route | key_url | limits_url | limits_kind |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | cursor-grok | Cursor / Grok | cursor | env `CURSOR_ACCESS_TOKEN` | https://cursor.com/settings | https://cursor.com/usage | manual |
+| 2 | codex | OpenAI Codex | openai-codex | env `OPENAI_CODEX_OAUTH_TOKEN` | https://platform.openai.com/api-keys | https://platform.openai.com/usage | manual |
+| 3 | claude | Anthropic Claude | anthropic | env `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys | https://console.anthropic.com/settings/usage | manual |
+| 4 | cline | Cline | cline-pass | agent.db login row | https://cline.bot | https://cline.bot | manual |
+| 5 | opencode | OpenCode | opencode-go | agent.db login row | https://opencode.ai | https://opencode.ai | manual |
+| 6 | zai | Z.ai | zai | agent.db login row | https://z.ai/manage-apikey/apikey-list | https://z.ai | manual |
+| 7 | openrouter | OpenRouter | openrouter | agent.db login row | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | api |
+| 8 | antigravity | Google Antigravity | google-antigravity | agent.db (OAuth-first) | https://antigravity.google | https://antigravity.google | manual |
+| 9 | copilot | GitHub Copilot | github-copilot | env `COPILOT_GITHUB_TOKEN` | https://github.com/settings/tokens | https://github.com/settings/copilot | manual |
 
 Notes:
 
 - `cursor-grok` is one subscription line in the problem statement; kept as one
-  catalog entry. Split it only if the user says they are separate.
-- OpenRouter is the only `limits_kind: api` entry at M4
-  (`GET /api/v1/credits`, public documented endpoint).
-- `(verify)` cells are intentionally empty-ish: the catalog ships the best
-  known value in code, `validate()` flags unverified entries, and M9's
-  `mar doctor` is the promotion path to `verified`.
+  catalog entry. omp's `cursor` provider is OAuth-first; the `crsr_` token is
+  written to the agent dir's `.env` (documented env fallback), which omp picks
+  up when no OAuth session is stored.
+- `codex` = ChatGPT/Codex OAuth subscription in omp (`openai-codex`). A plain
+  platform.openai.com API key belongs to omp's `openai` provider instead —
+  split the entry if the user holds both.
+- Credential routes: `env VAR` → `mar omp-sync` writes `VAR=<key>` to
+  `<agent_dir>/.env` (omp loads it as environment fallback); agent.db rows are
+  login-style and rank above env in omp's credential precedence.
+- Live checks 2026-10-10: openrouter key validated against
+  `GET /api/v1/credits`; cline/opencode/zai validated by `omp usage` account
+  endpoints in an isolated agent dir; cursor env token accepted by omp's
+  registry (123 cursor models listed).
+- `omp usage` reports quota windows for cline, opencode, and zai out of the
+  box; MAR's `mar limits` covers openrouter via API and points at
+  `limits_url` for the rest (M8 widens this).
 - Default models are the user's choice at `mar add` time; the catalog never
   invents one.

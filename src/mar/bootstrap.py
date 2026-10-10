@@ -124,7 +124,10 @@ def _sync_one(sub: Subscription, agent_dir: Path) -> tuple[str | None, str | Non
     if sub.auth_method != "api_key" or not sub.key:
         return None, "no api key"
     try:
-        omp.upsert_credential(agent_dir, provider.omp_provider_id, sub.key)
+        if provider.omp_env_var:
+            omp.upsert_env_key(agent_dir, provider.omp_env_var, sub.key)
+        else:
+            omp.upsert_credential(agent_dir, provider.omp_provider_id, sub.key)
     except omp.OmpError as exc:
         return None, str(exc)
     return provider.omp_provider_id, None
@@ -140,11 +143,13 @@ def sync(
 
     For every active subscription the catalog entry is resolved; entries with
     an empty or unverified omp provider id, unknown providers, and
-    subscriptions without an api key are skipped and reported. An
-    ``OmpError`` from one provider is reported as a skip for that provider
-    only; the remaining providers are still written. Afterwards, each
-    ``roles`` entry is applied via ``set_model_role`` (errors propagate —
-    roles are a single all-or-nothing config.yml).
+    subscriptions without an api key are skipped and reported. Catalog
+    entries with an ``omp_env_var`` are written to the agent dir's ``.env``
+    (environment fallback), all others as login-style rows in omp's
+    ``agent.db``. An ``OmpError`` from one provider is reported as a skip
+    for that provider only; the remaining providers are still written.
+    Afterwards, each ``roles`` entry is applied via ``set_model_role``
+    (errors propagate — roles are a single all-or-nothing config.yml).
 
     Args:
         reg: Registry to sync from; only active subscriptions are used.

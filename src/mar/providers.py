@@ -1,4 +1,4 @@
-"""Static catalog of the user's 10 AI providers + integrity validation.
+"""Static catalog of the user's 9 AI providers + integrity validation.
 
 Editorial source: docs/providers.md (kept in sync with it). The catalog is the
 single place MAR learns provider facts from; it never invents defaults or
@@ -17,6 +17,8 @@ __all__ = ["CATALOG", "Provider", "get", "ids", "unverified", "validate"]
 
 _ID_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
 _ID_RE = re.compile(_ID_PATTERN)
+_ENV_PATTERN = r"^[A-Z][A-Z0-9_]*$"
+_ENV_RE = re.compile(_ENV_PATTERN)
 _LIMITS_KINDS = frozenset({"api", "manual"})
 _URL_FIELDS = ("key_url", "limits_url", "signup_url")
 
@@ -37,6 +39,10 @@ class Provider:
         omp_provider_id: Value MAR writes into omp's ``agent.db``
             ``auth_credentials.provider``. Trustworthy only when
             ``verified`` is True.
+        omp_env_var: When nonempty, omp accepts this provider's credential
+            via this environment variable (written to the agent dir's
+            ``.env`` by ``mar omp-sync``) instead of a login-sourced
+            agent.db row. Empty means agent.db credential row.
         default_model: Always None — the user picks the default at
             ``mar add`` time; the catalog never invents one.
         limits_kind: ``"api"`` (real fetcher exists) or ``"manual"``
@@ -53,6 +59,7 @@ class Provider:
     limits_url: str
     signup_url: str
     omp_provider_id: str
+    omp_env_var: str
     default_model: str | None
     limits_kind: str
     verified: bool
@@ -68,12 +75,15 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://cursor.com/usage",
         signup_url="https://cursor.com/signup",
         omp_provider_id="cursor",
+        omp_env_var="CURSOR_ACCESS_TOKEN",
         default_model=None,
         limits_kind="manual",
-        verified=False,
+        verified=True,
         notes=(
-            "Best-known endpoints; omp id unverified. One subscription line "
-            "covering Cursor's Grok models; split only if the user says so."),
+            "omp id + env fallback confirmed in omp's provider roster "
+            "(2026-10-10). Cursor is OAuth-first in omp; MAR writes the "
+            "crsr_ token to agent .env. One subscription line covering "
+            "Cursor's Grok models; split only if the user says so."),
     ),
     Provider(
         id="codex",
@@ -82,11 +92,12 @@ CATALOG: tuple[Provider, ...] = (
         key_url="https://platform.openai.com/api-keys",
         limits_url="https://platform.openai.com/usage",
         signup_url="https://platform.openai.com/signup",
-        omp_provider_id="codex",
+        omp_provider_id="openai-codex",
+        omp_env_var="OPENAI_CODEX_OAUTH_TOKEN",
         default_model=None,
         limits_kind="manual",
-        verified=False,
-        notes="Best-known endpoints; omp id unverified.",
+        verified=True,
+        notes="omp id + env confirmed in omp's provider roster (2026-10-10).",
     ),
     Provider(
         id="claude",
@@ -96,10 +107,11 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://console.anthropic.com/settings/usage",
         signup_url="https://console.anthropic.com/",
         omp_provider_id="anthropic",
+        omp_env_var="ANTHROPIC_API_KEY",
         default_model=None,
         limits_kind="manual",
-        verified=False,
-        notes="Best-known endpoints; omp id unverified.",
+        verified=True,
+        notes="omp id + env confirmed in omp's provider roster (2026-10-10).",
     ),
     Provider(
         id="cline",
@@ -109,6 +121,7 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://cline.bot",
         signup_url="https://cline.bot",
         omp_provider_id="cline-pass",
+        omp_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -124,6 +137,7 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://opencode.ai",
         signup_url="https://opencode.ai",
         omp_provider_id="opencode-go",
+        omp_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -139,25 +153,13 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://z.ai",
         signup_url="https://z.ai",
         omp_provider_id="zai",
+        omp_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
         notes=(
             "omp provider id observed live in ~/.omp/agent/agent.db "
             "(2026-10-10); key/limits pages not yet confirmed."),
-    ),
-    Provider(
-        id="codebuddy",
-        display="CodeBuddy",
-        auth_methods=("api_key",),
-        key_url="https://www.codebuddy.ai",
-        limits_url="https://www.codebuddy.ai",
-        signup_url="https://www.codebuddy.ai",
-        omp_provider_id="codebuddy",
-        default_model=None,
-        limits_kind="manual",
-        verified=False,
-        notes="Best-known endpoints; omp id unverified.",
     ),
     Provider(
         id="openrouter",
@@ -167,12 +169,15 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://openrouter.ai/credits",
         signup_url="https://openrouter.ai/",
         omp_provider_id="openrouter",
+        omp_env_var="",
         default_model=None,
         limits_kind="api",
-        verified=False,
+        verified=True,
         notes=(
             "limits_kind 'api': GET /api/v1/credits is a publicly documented "
-            "endpoint (limits API verified); omp id unverified."),
+            "endpoint. omp id confirmed in omp's provider roster "
+            "(2026-10-10); MAR writes a login-style agent.db row (same tier "
+            "as /login, which omp validates against the provider)."),
     ),
     Provider(
         id="antigravity",
@@ -181,11 +186,12 @@ CATALOG: tuple[Provider, ...] = (
         key_url="https://antigravity.google",
         limits_url="https://antigravity.google",
         signup_url="https://antigravity.google",
-        omp_provider_id="antigravity",
+        omp_provider_id="google-antigravity",
+        omp_env_var="",
         default_model=None,
         limits_kind="manual",
-        verified=False,
-        notes="Best-known endpoints; omp id unverified.",
+        verified=True,
+        notes="omp id confirmed in omp's provider roster (2026-10-10); OAuth-backed provider.",
     ),
     Provider(
         id="copilot",
@@ -194,11 +200,12 @@ CATALOG: tuple[Provider, ...] = (
         key_url="https://github.com/settings/tokens",
         limits_url="https://github.com/settings/copilot",
         signup_url="https://github.com/features/copilot",
-        omp_provider_id="copilot",
+        omp_provider_id="github-copilot",
+        omp_env_var="COPILOT_GITHUB_TOKEN",
         default_model=None,
         limits_kind="manual",
-        verified=False,
-        notes="Best-known endpoints; omp id unverified.",
+        verified=True,
+        notes="omp id + env confirmed in omp's provider roster (2026-10-10).",
     ),
 )
 
@@ -207,7 +214,7 @@ def ids() -> tuple[str, ...]:
     """Return the catalog ids in their fixed, documented order.
 
     Returns:
-        Tuple of provider ids, exactly the 10 lines of docs/providers.md.
+        Tuple of provider ids, exactly the 9 lines of docs/providers.md.
     """
     return tuple(provider.id for provider in CATALOG)
 
@@ -237,7 +244,8 @@ def validate(catalog: Sequence[Provider] = CATALOG) -> list[str]:
     """Check catalog integrity; healthy input yields no problems.
 
     Rules: unique ids; ids and omp_provider_id match
-    ``^[a-z0-9][a-z0-9-]*$``; key_url/limits_url/signup_url start with
+    ``^[a-z0-9][a-z0-9-]*$``; omp_env_var matches ``^[A-Z][A-Z0-9_]*$``;
+    key_url/limits_url/signup_url start with
     ``https://``; limits_kind in {"api", "manual"}; verified entries must
     have a non-empty omp_provider_id and limits_url.
 
@@ -284,6 +292,11 @@ def validate(catalog: Sequence[Provider] = CATALOG) -> list[str]:
             problems.append(
                 f"provider '{pid}': omp_provider_id '{omp_id}' "
                 f"does not match {_ID_PATTERN}"
+            )
+        if provider.omp_env_var and not _ENV_RE.match(provider.omp_env_var):
+            problems.append(
+                f"provider '{pid}': omp_env_var '{provider.omp_env_var}' "
+                f"does not match {_ENV_PATTERN}"
             )
     return problems
 

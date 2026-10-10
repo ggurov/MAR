@@ -158,6 +158,39 @@ def test_sync_writes_zai_key_into_tmp_agent_db(tmp_path: Path) -> None:
     assert rows == [("zai", "api_key", json.dumps({"key": FAKE_KEY}, separators=(",", ":")))]
 
 
+def test_sync_writes_env_var_provider_to_dotenv(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    reg = _registry(tmp_path, [_sub("cursor-grok", model="grok-4")])
+
+    report = sync(reg, agent_dir=agent_dir)
+
+    assert report == SyncReport(written=("cursor",), skipped=())
+    assert not (agent_dir / "agent.db").exists()
+    content = (agent_dir / ".env").read_text(encoding="utf-8")
+    assert content == f"CURSOR_ACCESS_TOKEN={FAKE_KEY}\n"
+
+
+def test_sync_skips_unverified_omp_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No shipped catalog entry is unverified anymore; tamper one in to keep
+    # the guard tested (a future catalog edit must not silently write).
+    from mar import providers
+
+    tampered = dataclasses.replace(
+        providers.get("zai"), id="ghost", verified=False, omp_provider_id="ghost"
+    )
+    monkeypatch.setattr(providers, "CATALOG", (*providers.CATALOG, tampered))
+    agent_dir = tmp_path / "agent"
+    reg = _registry(tmp_path, [_sub("ghost")])
+
+    report = sync(reg, agent_dir=agent_dir)
+
+    assert report.skipped == (("ghost", "omp provider id unverified"),)
+    assert report.written == ()
+    assert not (agent_dir / "agent.db").exists()
+
+
 def test_sync_report_is_frozen() -> None:
     report = SyncReport(written=(), skipped=())
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -166,7 +199,6 @@ def test_sync_report_is_frozen() -> None:
 
 SKIP_CASES = [
     pytest.param("ghost-labs", "api_key", "unknown provider", id="unknown-provider"),
-    pytest.param("cursor-grok", "api_key", "omp provider id unverified", id="unverified-omp-id"),
     pytest.param("zai", "oauth", "no api key", id="oauth-has-no-key"),
 ]
 
@@ -259,7 +291,7 @@ def test_sync_uses_default_agent_dir_when_omitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agent_dir = tmp_path / "agent"
-    monkeypatch.setenv("OMP_AGENT_DIR", str(agent_dir))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent_dir))
     reg = _registry(tmp_path, [_sub("zai", model="glm-5.3-flash")])
 
     report = sync(reg)

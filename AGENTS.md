@@ -41,7 +41,7 @@ bisect.
 
 1. **Tests never touch real user state.** No `~/.mar`, no `~/.omp`, no network
    in unit tests. Every path comes from `tmp_path` or an explicit argument.
-   `MAR_HOME` / `OMP_AGENT_DIR` env vars are overrides for production use, and
+   `MAR_HOME` / `PI_CODING_AGENT_DIR` env vars are overrides for production use, and
    tests must set them to `tmp_path` when exercising default-path logic.
 2. **Keys are secrets.** Never print, log, commit, or embed a raw key. Use the
    CLI's masking output (`sk_…abcd`). Fixtures use obviously fake keys

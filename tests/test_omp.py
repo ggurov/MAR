@@ -19,6 +19,7 @@ from mar.omp import (
     list_credentials,
     set_model_role,
     upsert_credential,
+    upsert_env_key,
 )
 
 FAKE_KEY = "test-key-1234567890"
@@ -300,14 +301,14 @@ def test_set_model_role_rejects_empty_args(
 def test_default_agent_dir_prefers_env_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("OMP_AGENT_DIR", str(tmp_path / "custom"))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "custom"))
     assert default_agent_dir() == tmp_path / "custom"
 
 
 def test_default_agent_dir_falls_back_to_home(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("OMP_AGENT_DIR", raising=False)
+    monkeypatch.delenv("PI_CODING_AGENT_DIR", raising=False)
     assert default_agent_dir() == Path.home() / ".omp" / "agent"
 
 
@@ -315,5 +316,45 @@ def test_default_agent_dir_falls_back_to_home(
 def test_default_agent_dir_treats_blank_env_as_unset(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
-    monkeypatch.setenv("OMP_AGENT_DIR", value)
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", value)
     assert default_agent_dir() == Path.home() / ".omp" / "agent"
+
+
+# --- upsert_env_key ----------------------------------------------------------
+
+
+def test_upsert_env_key_creates_file_and_dir(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    upsert_env_key(agent_dir, "CURSOR_ACCESS_TOKEN", "crsr_fake_1234567890")
+    content = (agent_dir / ".env").read_text(encoding="utf-8")
+    assert content == "CURSOR_ACCESS_TOKEN=crsr_fake_1234567890\n"
+
+
+def test_upsert_env_key_preserves_other_lines(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "FOO=bar\nOPENROUTER_API_KEY=old\n# comment\n", encoding="utf-8"
+    )
+    upsert_env_key(tmp_path, "OPENROUTER_API_KEY", "new")
+    lines = env.read_text(encoding="utf-8").splitlines()
+    assert lines == ["FOO=bar", "OPENROUTER_API_KEY=new", "# comment"]
+
+
+def test_upsert_env_key_replaces_export_prefixed_line(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("export XAI_API_KEY=old\n", encoding="utf-8")
+    upsert_env_key(tmp_path, "XAI_API_KEY", "new")
+    assert env.read_text(encoding="utf-8") == "XAI_API_KEY=new\n"
+
+
+@pytest.mark.parametrize(
+    ("var", "key"),
+    [("lower_case", "v"), ("HAS SPACE", "v"), ("", "v"), ("GOOD", "")],
+    ids=["lower", "space", "empty-var", "empty-key"],
+)
+def test_upsert_env_key_rejects_bad_args(
+    tmp_path: Path, var: str, key: str
+) -> None:
+    with pytest.raises(OmpError):
+        upsert_env_key(tmp_path, var, key)
+    assert not (tmp_path / ".env").exists()

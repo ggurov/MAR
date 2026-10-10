@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -27,7 +28,10 @@ __all__ = [
     "list_credentials",
     "set_model_role",
     "upsert_credential",
+    "upsert_env_key",
 ]
+
+_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Verbatim live DDL from docs/architecture.md ("omp integration contract").
 # Applied only when agent.db exists without the auth_credentials table, so the
@@ -59,13 +63,14 @@ class OmpError(Exception):
 def default_agent_dir() -> Path:
     """Resolve the omp agent directory.
 
-    Returns $OMP_AGENT_DIR when set to a non-blank value (read at call time),
-    else ``Path.home() / ".omp" / "agent"``. The directory is not created.
+    Returns $PI_CODING_AGENT_DIR when set to a non-blank value (read at call
+    time) — the override omp itself honors — else
+    ``Path.home() / ".omp" / "agent"``. The directory is not created.
 
     Returns:
         Path to the omp agent directory.
     """
-    override = os.environ.get("OMP_AGENT_DIR", "").strip()
+    override = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
     if override:
         return Path(override)
     return Path.home() / ".omp" / "agent"
@@ -199,6 +204,53 @@ def set_model_role(agent_dir: Path, role: str, model: str) -> None:
         )
     except OSError as exc:
         raise OmpError(f"failed to write {config_path}: {exc}") from exc
+
+
+def upsert_env_key(agent_dir: Path, var: str, key: str) -> None:
+    """Set ``VAR=key`` in ``<agent_dir>/.env``, preserving all other content.
+
+    omp loads the agent directory's ``.env`` as an environment fallback for
+    providers whose catalog entry declares an env-var credential (e.g.
+    ``CURSOR_ACCESS_TOKEN``). If a line for ``var`` already exists (with or
+    without an ``export `` prefix), its first occurrence is replaced in
+    place; otherwise the pair is appended. The file and agent directory are
+    created when missing.
+
+    Args:
+        agent_dir: omp agent directory containing (or receiving) ``.env``.
+        var: Environment variable name; must match ``^[A-Z][A-Z0-9_]*$``.
+        key: Credential value written after the ``=``.
+
+    Raises:
+        OmpError: If ``var``/``key`` are blank or malformed, or the file
+            cannot be written.
+    """
+    if not var or not _ENV_NAME_RE.match(var):
+        raise OmpError(f"invalid environment variable name: {var!r}")
+    if not key:
+        raise OmpError(f"refusing to write an empty value for {var}")
+    env_path = agent_dir / ".env"
+    try:
+        existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    except OSError as exc:
+        raise OmpError(f"failed to read {env_path}: {exc}") from exc
+    replacement = f"{var}={key}"
+    lines: list[str] = existing.splitlines()
+    replaced = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        name = stripped.removeprefix("export ").split("=", 1)[0].strip()
+        if name == var:
+            lines[index] = replacement
+            replaced = True
+            break
+    if not replaced:
+        lines.append(replacement)
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise OmpError(f"failed to write {env_path}: {exc}") from exc
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

@@ -1,8 +1,9 @@
 """Tests for the static provider catalog (M2).
 
-The catalog must mirror docs/providers.md exactly: 10 providers, fixed order,
-verification flags as observed on 2026-10-10. Validation rules are exercised
-by tampering with copies of catalog entries (the shipped CATALOG is frozen).
+The catalog must mirror docs/providers.md exactly: 9 providers, fixed order,
+verification flags confirmed against omp's provider roster on 2026-10-10.
+Validation rules are exercised by tampering with copies of catalog entries
+(the shipped CATALOG is frozen).
 """
 
 import dataclasses
@@ -18,20 +19,37 @@ EXPECTED_IDS = (
     "cline",
     "opencode",
     "zai",
-    "codebuddy",
     "openrouter",
     "antigravity",
     "copilot",
 )
 
-UNVERIFIED_IDS = {
-    "cursor-grok",
-    "codex",
-    "claude",
-    "codebuddy",
-    "openrouter",
-    "antigravity",
-    "copilot",
+UNVERIFIED_IDS: set[str] = set()
+
+VERIFIED_IDS = set(EXPECTED_IDS)
+
+OMP_IDS = {
+    "cursor-grok": "cursor",
+    "codex": "openai-codex",
+    "claude": "anthropic",
+    "cline": "cline-pass",
+    "opencode": "opencode-go",
+    "zai": "zai",
+    "openrouter": "openrouter",
+    "antigravity": "google-antigravity",
+    "copilot": "github-copilot",
+}
+
+ENV_VARS = {
+    "cursor-grok": "CURSOR_ACCESS_TOKEN",
+    "codex": "OPENAI_CODEX_OAUTH_TOKEN",
+    "claude": "ANTHROPIC_API_KEY",
+    "cline": "",
+    "opencode": "",
+    "zai": "",
+    "openrouter": "",
+    "antigravity": "",
+    "copilot": "COPILOT_GITHUB_TOKEN",
 }
 
 URL_FIELDS = ("key_url", "limits_url", "signup_url")
@@ -40,7 +58,7 @@ URL_FIELDS = ("key_url", "limits_url", "signup_url")
 def test_ids_returns_exact_catalog_in_order():
     assert ids() == EXPECTED_IDS
     assert tuple(p.id for p in CATALOG) == EXPECTED_IDS
-    assert len(CATALOG) == 10
+    assert len(CATALOG) == 9
 
 
 def test_get_returns_matching_provider():
@@ -71,27 +89,23 @@ def test_validate_shipped_catalog_is_healthy():
     assert validate() == []
 
 
-def test_unverified_has_exactly_seven_members():
-    un = unverified()
-    assert len(un) == 7
-    assert {p.id for p in un} == UNVERIFIED_IDS
-    assert all(not p.verified for p in un)
+def test_unverified_is_empty_every_entry_confirmed():
+    assert unverified() == ()
+    assert all(p.verified for p in CATALOG)
 
 
-def test_verified_are_the_three_live_observed_providers():
-    assert {p.id for p in CATALOG if p.verified} == {
-        "cline",
-        "opencode",
-        "zai",
-    }
+def test_verified_are_all_nine_roster_confirmed_providers():
+    assert {p.id for p in CATALOG if p.verified} == VERIFIED_IDS
 
 
-@pytest.mark.parametrize(
-    ("provider_id", "omp_id"),
-    [("cline", "cline-pass"), ("opencode", "opencode-go"), ("zai", "zai")],
-)
-def test_observed_omp_ids_are_shipped_verbatim(provider_id, omp_id):
+@pytest.mark.parametrize(("provider_id", "omp_id"), sorted(OMP_IDS.items()))
+def test_omp_ids_match_official_roster(provider_id, omp_id):
     assert get(provider_id).omp_provider_id == omp_id
+
+
+@pytest.mark.parametrize(("provider_id", "env_var"), sorted(ENV_VARS.items()))
+def test_omp_env_vars_match_official_roster(provider_id, env_var):
+    assert get(provider_id).omp_env_var == env_var
 
 
 def test_limits_kind_api_applies_only_to_openrouter():
@@ -104,11 +118,6 @@ def test_limits_kind_api_applies_only_to_openrouter():
 def test_v1_defaults(provider):
     assert provider.auth_methods == ("api_key",)
     assert provider.default_model is None
-
-
-@pytest.mark.parametrize("provider", unverified(), ids=lambda p: p.id)
-def test_unverified_entries_carry_warning_note(provider):
-    assert "omp id unverified" in provider.notes
 
 
 BASE = CATALOG[0]
@@ -148,6 +157,11 @@ TAMPER_CASES = [
         dataclasses.replace(BASE, omp_provider_id="Zai Main"),
         "omp_provider_id 'Zai Main' does not match",
         id="bad-omp-id-shape",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, omp_env_var="not an env var"),
+        "omp_env_var 'not an env var' does not match",
+        id="bad-env-var-shape",
     ),
 ]
 
