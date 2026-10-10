@@ -76,6 +76,17 @@ docs/            # architecture.md (contracts), providers.md (catalog data)
 PLAN.md          # milestones + acceptance criteria; update when scope changes
 ```
 
+## Git workflow (project guideline)
+
+- `main` is the trunk; work happens on feature branches:
+  `feat/<slug>`, `fix/<slug>`, `docs/<slug>`.
+- Ship via PR: `git push -u origin <branch>` → `gh pr create` → read your own
+  diff → `gh pr merge --squash --delete-branch`. No straight pushes to `main`.
+- A PR merges only when `uv run pytest` and `uv run ruff check src tests`
+  pass on the branch.
+- Keep PRs one-concept; the squash message follows the same
+  `feat:`/`fix:`/`docs:`/`chore:` prefixes as commits.
+
 ## Definition of done
 
 - `uv run pytest` exits 0 with the new slice covered (happy path + boundary +

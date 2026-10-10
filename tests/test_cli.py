@@ -132,6 +132,32 @@ class TestLimits:
     def test_limits_no_active_subscriptions(self, reg_path):
         assert run(reg_path, "limits") == 1
 
+    def test_limits_gemini_prints_liveness_note(self, reg_path, monkeypatch, capsys):
+        run(reg_path, "add", "gemini", "--key", "AQ.gemini-fake-key-1234567890")
+        capsys.readouterr()
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"models": [{"name": "models/gemini-3-flash"}]}
+                ).encode()
+
+        monkeypatch.setattr(
+            "mar.limits._open", lambda request, timeout=10.0: FakeResponse()
+        )
+        assert run(reg_path, "limits", "gemini") == 0
+        out = capsys.readouterr().out
+        assert "gemini (api):" in out
+        assert "key alive: 1 models visible (1 gemini)" in out
+
 
 class TestOmpSync:
     def test_omp_sync_writes_db_rows_and_env_vars(self, reg_path, tmp_path, capsys):
