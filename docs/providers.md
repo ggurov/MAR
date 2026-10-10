@@ -18,7 +18,7 @@ promotes/demotes these).
 | 5 | opencode | OpenCode | api_key | opencode-go | https://opencode.ai | (verify) | (user picks) | manual | id yes |
 | 6 | zai | Z.ai | api_key | zai | (verify) | (verify) | (user picks) | manual | id yes |
 | 7 | codebuddy | CodeBuddy | api_key | (verify) | https://www.codebuddy.ai | (verify) | (user picks) | manual | no |
-| 8 | openrouter | OpenRouter | api_key | (verify) | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | (user picks) | api | url yes |
+| 8 | openrouter | OpenRouter | api_key | (verify) | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | (user picks) | api | no (limits API yes) |
 | 9 | antigravity | Google Antigravity | api_key | (verify) | https://antigravity.google | (verify) | (user picks) | manual | no |
 | 10 | copilot | GitHub Copilot | api_key | (verify) | https://github.com/settings/tokens | https://github.com/settings/copilot | (user picks) | manual | no |
 

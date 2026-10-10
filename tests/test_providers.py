@@ -29,6 +29,7 @@ UNVERIFIED_IDS = {
     "codex",
     "claude",
     "codebuddy",
+    "openrouter",
     "antigravity",
     "copilot",
 }
@@ -70,19 +71,18 @@ def test_validate_shipped_catalog_is_healthy():
     assert validate() == []
 
 
-def test_unverified_has_exactly_six_members():
+def test_unverified_has_exactly_seven_members():
     un = unverified()
-    assert len(un) == 6
+    assert len(un) == 7
     assert {p.id for p in un} == UNVERIFIED_IDS
     assert all(not p.verified for p in un)
 
 
-def test_verified_are_the_four_confirmed_providers():
+def test_verified_are_the_three_live_observed_providers():
     assert {p.id for p in CATALOG if p.verified} == {
         "cline",
         "opencode",
         "zai",
-        "openrouter",
     }
 
 

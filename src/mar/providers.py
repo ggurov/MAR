@@ -169,10 +169,10 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="openrouter",
         default_model=None,
         limits_kind="api",
-        verified=True,
+        verified=False,
         notes=(
             "limits_kind 'api': GET /api/v1/credits is a publicly documented "
-            "endpoint; omp id unverified."),
+            "endpoint (limits API verified); omp id unverified."),
     ),
     Provider(
         id="antigravity",
