@@ -341,12 +341,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                     *role_lines,
                     "'@",
                     "if (-not (Test-Path $cfg)) { Set-Content $cfg $roles -Encoding ascii }",
-                    "else {",
-                    "  if (-not (Select-String -Path $cfg -Pattern '(?m)^modelRoles:' -Quiet)) {",
-                    "    if ((Get-Content $cfg -Raw).EndsWith(\"`n\") -eq $false) { Add-Content $cfg '' }",
-                    "    Add-Content $cfg $roles",
-                    "  }",
-                    "}",
+                    "if ((Test-Path $cfg) -and -not (Select-String -Path $cfg -Pattern '(?m)^modelRoles:' -Quiet)) { if (-not (Get-Content $cfg -Raw).EndsWith(\"`n\")) { Add-Content $cfg '' }; Add-Content $cfg $roles }",
                 ]
             )
     else:

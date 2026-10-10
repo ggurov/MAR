@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sqlite3
 
 import pytest
@@ -298,6 +299,12 @@ class TestExport:
         assert "  default: zai/glm-5.3-flash:max" in out
         assert "Select-String" in out  # idempotent guard for existing configs
         assert "role-set for judge, default" in captured.err
+        # paste-safety: interactive PowerShell runs line-by-line; no statement
+        # may continue onto a following line (a bare `else` breaks paste).
+        assert re.search(r"(?m)^\s*else\b", out) is None
+        for line in out.splitlines():
+            if line.startswith("if ("):
+                assert line.rstrip().endswith("}"), f"dangling if-block line: {line!r}"
 
     def test_export_roles_bash_variant(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "iso-agent"
