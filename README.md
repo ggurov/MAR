@@ -11,7 +11,7 @@
 
 ```powershell
 PS> mar add openrouter --key sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxx
-added openrouter (key: sk-o...yxxx)
+added openrouter (key: sk-o…yxxx)
 
 PS> mar list
 claude         active    oauth    default=-                    key=sk-a…cAAA
@@ -25,7 +25,38 @@ zai            active    api_key  default=-                    key=069b…Su1I
 PS> mar export        # → paste the block on any machine with omp; done
 ```
 
+## TL;DR — agentic operation (the easy way)
+
+You never need the commands below. Clone the repo, run omp inside it, and just
+ask:
+
+```bash
+git clone https://github.com/ggurov/MAR && cd MAR
+uv tool install -e .   # optional; agents can also use `uv run mar`
+omp
+```
+
+Then talk to the agent in free form — it reads [AGENTS.md](AGENTS.md), so it
+already knows the TDD rules, the provider catalog, and to never leak your keys:
+
+> *"here's my zai key: 0123abcd44332211.efghijklmn — add it, default model glm-5.3-flash"*
+
+> *"what's active, and how much openrouter credit do I have left?"*
+
+> *"sync everything into my omp install, judge should be jev"*
+
+> *"give me the export block for windows"* … *"and one for linux"*
+
+> *"gemini stopped working — check if the key is still alive"*
+
+The agent runs the right `mar` commands, masks your keys in every output,
+tests anything it changes, and hands you the pastable. That's the whole
+workflow: **clone → run omp → ask**.
+
 ## Examples (fake keys shown)
+
+The commands the agent runs under the hood — for reference, or if you'd rather
+drive it yourself:
 
 ### Register subscriptions
 
