@@ -1,0 +1,34 @@
+I have a problem:
+
+I have multiple AI subscriptions with multiple AI providers:
+
+Cursor/Grok
+Codex
+Claude
+Cline
+OpenCode
+Z.ai
+Codebuddy
+openrouter
+Antigravity
+Copilot
+
+
+Each one has different models
+Some have similar models
+Each is different key
+Each one has their limits
+Those limits are somewhat hidden and not in one place
+
+
+I also use Oh My Pi exclusively for the harness, but i often start out installing a brand new one and then have to go hunt for keys, go to websites to see the limits and generally do manual things i want nothing to do with anymore. 
+
+I need:
+
+add subscriptions - either just authenticate the system and let it manage stuff for me, or give it an unlimited key to that provider
+a way to see what subscriptions are active
+see what limit they are at
+VERY quickly set up ALL of the providers i have into OMP without going to each one.
+have custom stuff i can add to the "startup code" - my idea is to have a single prompt that i start a new install of OMP with, that sets up everything for me, adds all the providers, selects my default models for them, and runs a custom prompt hat asks omp to set more stuff up.
+
+i don't want it as a proxy that takes traffic, but more of a setup assistant and key tracking assistant
