@@ -150,10 +150,11 @@ def test_export_key_env_vars_match_official_roster(provider_id, env_var):
     assert get(provider_id).export_env_var == env_var
 
 
-def test_limits_kind_api_applies_only_to_openrouter():
+def test_limits_kind_api_providers_are_openrouter_and_gemini():
     api_providers = [p for p in CATALOG if p.limits_kind == "api"]
-    assert [p.id for p in api_providers] == ["openrouter"]
-    assert all(p.limits_kind == "manual" for p in CATALOG if p.id != "openrouter")
+    assert [p.id for p in api_providers] == ["openrouter", "gemini"]
+    manual = [p.id for p in CATALOG if p.limits_kind == "manual"]
+    assert "gemini" not in manual
 
 
 @pytest.mark.parametrize("provider", CATALOG, ids=lambda p: p.id)

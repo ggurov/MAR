@@ -185,7 +185,7 @@ def _fetch_openrouter(key: str, timeout: float) -> LimitSnapshot:
         headers={"Authorization": f"Bearer {key}"},
         method="GET",
     )
-    payload = _read_json(request, timeout)
+    payload = _read_json(request, timeout, api_name="openrouter credits API")
     data = payload.get("data")
     if not isinstance(data, dict):
         raise LimitError("openrouter credits response is missing the 'data' object")
@@ -205,45 +205,97 @@ def _fetch_openrouter(key: str, timeout: float) -> LimitSnapshot:
     )
 
 
+_GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
+
+
+def _fetch_gemini(key: str, timeout: float) -> LimitSnapshot:
+    """GET Google's models list as a key-liveness and access snapshot.
+
+    Google publishes no usage API for AI Studio keys (quotas are per-model
+    RPM/RPD tiers, visible only in the AI Studio UI), so the strongest
+    machine-checkable signal is the documented models list: a 200 response
+    proves the key is alive and shows which models it may access.
+
+    Args:
+        key: Gemini API key (``AQ.``-style AI Studio key); sent only as the
+            ``x-goog-api-key`` header, never logged.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        LimitSnapshot with no items and a ``note`` of the form
+        ``key alive: N models visible (G gemini)``; ``source="api"``.
+
+    Raises:
+        LimitError: On HTTP/connection/timeout failures, malformed JSON, or
+            a response without a ``models`` list. Never includes ``key`` in
+            the message.
+    """
+    request = urllib.request.Request(
+        _GEMINI_MODELS_URL,
+        headers={"x-goog-api-key": key},
+        method="GET",
+    )
+    payload = _read_json(request, timeout, api_name="gemini models API")
+    models = payload.get("models")
+    if not isinstance(models, list):
+        raise LimitError("gemini models response is missing the 'models' list")
+    ids = [
+        entry.get("name", "").split("/")[-1]
+        for entry in models
+        if isinstance(entry, dict)
+    ]
+    gemini = [model_id for model_id in ids if "gemini" in model_id]
+    return LimitSnapshot(
+        provider="gemini",
+        fetched_at=_now_iso(),
+        items=(),
+        source="api",
+        note=f"key alive: {len(ids)} models visible ({len(gemini)} gemini)",
+    )
+
+
 _FETCHERS: dict[str, Callable[[str, float], LimitSnapshot]] = {
     "openrouter": _fetch_openrouter,
+    "gemini": _fetch_gemini,
 }
 
 
-def _read_json(request: urllib.request.Request, timeout: float) -> dict:
+def _read_json(request: urllib.request.Request, timeout: float, *, api_name: str) -> dict:
     """Perform the request and return the parsed JSON object.
 
     Args:
         request: Prepared urllib request.
         timeout: Request timeout in seconds.
+        api_name: Human label used in error messages (e.g.
+            ``"openrouter credits API"``).
 
     Returns:
         The decoded top-level JSON object.
 
     Raises:
         LimitError: On non-200 status, HTTPError, URLError, timeout, or
-            malformed/non-object JSON bodies.
+            malformed/non-object JSON bodies. Messages carry ``api_name``.
     """
     try:
         with _open(request, timeout=timeout) as response:
             status = getattr(response, "status", None)
             if status is not None and status != 200:
-                raise LimitError(f"openrouter credits API returned HTTP {status}")
+                raise LimitError(f"{api_name} returned HTTP {status}")
             body = response.read()
     except urllib.error.HTTPError as exc:
-        raise LimitError(f"openrouter credits API returned HTTP {exc.code} ({exc.reason})") from exc
+        raise LimitError(f"{api_name} returned HTTP {exc.code} ({exc.reason})") from exc
     except TimeoutError as exc:
-        raise LimitError("openrouter credits API request timed out") from exc
+        raise LimitError(f"{api_name} request timed out") from exc
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
-            raise LimitError("openrouter credits API request timed out") from exc
-        raise LimitError(f"openrouter credits API request failed: {exc.reason}") from exc
+            raise LimitError(f"{api_name} request timed out") from exc
+        raise LimitError(f"{api_name} request failed: {exc.reason}") from exc
     try:
         payload = json.loads(body)
     except (ValueError, UnicodeDecodeError) as exc:
-        raise LimitError(f"openrouter credits API returned malformed JSON: {exc}") from exc
+        raise LimitError(f"{api_name} returned malformed JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        raise LimitError("openrouter credits API response is not a JSON object")
+        raise LimitError(f"{api_name} response is not a JSON object")
     return payload
 
 

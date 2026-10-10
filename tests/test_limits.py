@@ -65,8 +65,57 @@ def raises_open(exc: Exception):
 def test_supported_lists_api_kind_ids_in_catalog_order():
     from mar.providers import CATALOG
 
-    assert supported() == ["openrouter"]
+    assert supported() == ["openrouter", "gemini"]
     assert supported() == [p.id for p in CATALOG if p.limits_kind == "api"]
+
+
+# ---------------------------------------------------------------- gemini fetcher()
+
+
+def test_fetch_gemini_reports_key_liveness(monkeypatch):
+    captured = {}
+    payload = json.dumps(
+        {
+            "models": [
+                {"name": "models/gemini-3-flash"},
+                {"name": "models/gemini-flash-lite-latest"},
+                {"name": "models/text-embedding-005"},
+            ]
+        }
+    ).encode()
+
+    def fake_open(request, timeout=10.0):
+        captured["url"] = request.full_url
+        captured["header"] = request.headers
+        return _body(payload)(request, timeout)
+
+    monkeypatch.setattr("mar.limits._open", fake_open)
+    snap = fetch("gemini", "gemini-key-1234567890")
+    assert captured["url"].startswith("https://generativelanguage.googleapis.com/v1beta/models")
+    headers = {k.lower(): v for k, v in captured["header"].items()}
+    assert headers["x-goog-api-key"] == "gemini-key-1234567890"
+    assert snap.source == "api"
+    assert snap.items == ()
+    assert snap.note == "key alive: 3 models visible (2 gemini)"
+    assert "gemini-key-1234567890" not in snap.note
+
+
+def test_fetch_gemini_missing_models_list(monkeypatch):
+    monkeypatch.setattr("mar.limits._open", _payload({"models": None}))
+    with pytest.raises(LimitError) as excinfo:
+        fetch("gemini", "gemini-key-1234567890")
+    assert "missing the 'models' list" in str(excinfo.value)
+
+
+def test_fetch_gemini_http_error_names_gemini(monkeypatch):
+    monkeypatch.setattr(
+        "mar.limits._open",
+        raises_open(urllib.error.HTTPError("https://x", 400, "Bad Request", None, None)),
+    )
+    with pytest.raises(LimitError) as excinfo:
+        fetch("gemini", "gemini-key-1234567890")
+    assert "gemini models API returned HTTP 400" in str(excinfo.value)
+    assert "gemini-key-1234567890" not in str(excinfo.value)
 
 
 # ------------------------------------------------------------- manual_hint()

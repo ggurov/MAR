@@ -267,9 +267,13 @@ CATALOG: tuple[Provider, ...] = (
         export_env_var="GEMINI_API_KEY",
         export_oauth_env_var="",
         default_model=None,
-        limits_kind="manual",
+        limits_kind="api",
         verified=True,
-        notes="omp id + env confirmed in omp's provider roster (2026-10-10).",
+        notes=(
+            "limits_kind 'api': MAR checks key liveness via the documented "
+            "models list (Google publishes no usage API for AI Studio keys; "
+            "usage is visible only in the AI Studio UI). omp id + env "
+            "confirmed in omp's provider roster (2026-10-10)."),
     ),
 )
 

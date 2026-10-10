@@ -195,6 +195,8 @@ def _cmd_limits(args: argparse.Namespace) -> int:
                 exit_code = 1
                 continue
             print(f"{pid} ({snap.source}):")
+            if snap.note:
+                print(f"  {snap.note}")
             for item in snap.items:
                 used = "?" if item.used is None else item.used
                 cap = "?" if item.limit is None else item.limit
