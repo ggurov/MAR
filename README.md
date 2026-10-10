@@ -31,13 +31,19 @@ graph LR
 ## Quickstart
 
 ```bash
-uv sync
+uv tool install -e .   # from the repo: installs `mar` on PATH (any shell)
+mar --help
+uv sync                # dev setup: venv + pytest + ruff
 uv run pytest          # TDD harness
-uv run mar --help
 ```
 
+`uv tool install -e .` is editable: code changes in the repo apply to the
+global `mar` immediately. Without it, run everything as `uv run mar …` from
+the repo directory.
+
 Data lives in `~/.mar/registry.json` (override with `MAR_HOME`). omp integration
-targets `~/.omp/agent` (override with `OMP_AGENT_DIR`).
+targets `~/.omp/agent` (override with `PI_CODING_AGENT_DIR` — the same variable
+omp itself honors, so you can point MAR at an isolated omp install).
 
 ## Status
 
