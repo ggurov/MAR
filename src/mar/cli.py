@@ -246,31 +246,32 @@ def _cmd_export(args: argparse.Namespace) -> int:
             try:
                 provider = providers.get(sub.provider)
             except KeyError:
-                skipped.append(f"#   {sub.provider}: unknown provider (not in catalog)")
+                skipped.append(f"skipped {sub.provider}: unknown provider (not in catalog)")
                 continue
             if not sub.key:
-                skipped.append(f"#   {sub.provider}: oauth token missing; run mar pull")
+                skipped.append(f"skipped {sub.provider}: oauth token missing; run mar pull")
                 continue
             if not provider.export_oauth_env_var:
                 skipped.append(
-                    f"#   {sub.provider}: no oauth env route in omp; run /login "
-                    f"{provider.omp_provider_id} there"
+                    f"skipped {sub.provider}: no oauth env route in omp; "
+                    f"run /login {provider.omp_provider_id} there"
                 )
                 continue
             pairs.append((provider.export_oauth_env_var, sub.key))
             oauth_used = True
             continue
         if sub.auth_method != "api_key" or not sub.key:
-            skipped.append(f"#   {sub.provider}: no api key stored")
+            skipped.append(f"skipped {sub.provider}: no api key stored")
             continue
         try:
             provider = providers.get(sub.provider)
         except KeyError:
-            skipped.append(f"#   {sub.provider}: unknown provider (not in catalog)")
+            skipped.append(f"skipped {sub.provider}: unknown provider (not in catalog)")
             continue
         if not provider.export_env_var:
             skipped.append(
-                f"#   {sub.provider}: no env route in omp; run /login {provider.omp_provider_id} there"
+                f"skipped {sub.provider}: no env route in omp; "
+                f"run /login {provider.omp_provider_id} there"
             )
             continue
         pairs.append((provider.export_env_var, sub.key))
@@ -280,8 +281,6 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if args.shell == "powershell":
         body = "\n".join(
             [
-                "# MAR portable setup — paste this whole block into PowerShell on the target machine.",
-                "# It writes omp's agent .env (contains SECRETS; omp deletes nothing, omp reads it at startup).",
                 'New-Item -ItemType Directory -Force "$env:USERPROFILE\\.omp\\agent" | Out-Null',
                 "@'",
                 *lines,
@@ -291,27 +290,21 @@ def _cmd_export(args: argparse.Namespace) -> int:
     else:
         body = "\n".join(
             [
-                "# MAR portable setup — paste this whole block into bash on the target machine.",
-                "# It writes omp's agent .env (contains SECRETS; omp reads it at startup).",
                 "mkdir -p ~/.omp/agent",
                 "cat > ~/.omp/agent/.env <<'MAR_EOF'",
                 *lines,
                 "MAR_EOF",
             ]
         )
-    footer = [
-        "# Then verify and start:  omp usage    omp --yolo",
-        f"# Exported {len(pairs)} credential(s) from MAR ({args.shell}).",
-    ]
+    notes = [f"exported {len(pairs)} credential(s) ({args.shell}); then run: omp usage / omp --yolo"]
     if oauth_used:
-        footer.append(
-            "# Includes OAuth tokens: they EXPIRE. When they do, re-run `mar pull && mar export`"
+        notes.append(
+            "includes OAuth tokens: they EXPIRE; re-run `mar pull && mar export` to refresh"
         )
-        footer.append("# on the MAR machine and paste the new block (omp refreshes only its own store).")
-    if skipped:
-        footer.append("# Not exportable:")
-        footer.extend(skipped)
-    text = "\n".join([_EXPORT_BEGIN, body, *footer, _EXPORT_END]) + "\n"
+    notes.extend(skipped)
+    text = f"{_EXPORT_BEGIN}\n{body}\n{_EXPORT_END}\n"
+    for note in notes:
+        print(f"mar: {note}", file=sys.stderr)
     if args.output:
         out_path = Path(args.output)
         out_path.write_text(text, encoding="utf-8")

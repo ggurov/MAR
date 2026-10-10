@@ -203,14 +203,16 @@ class TestExport:
         run(reg_path, "add", "cursor-grok", "--key", "cursor-key-1234567890")
         capsys.readouterr()
         assert run(reg_path, "export") == 0
-        out = capsys.readouterr().out
+        captured = capsys.readouterr()
+        out = captured.out
         assert out.startswith(cli._EXPORT_BEGIN + "\n")
         assert cli._EXPORT_END in out
+        assert "#" not in out.replace(cli._EXPORT_BEGIN, "").replace(cli._EXPORT_END, "")
         assert "ZAI_API_KEY=zai-key-1234567890" in out
         assert "CURSOR_ACCESS_TOKEN=cursor-key-1234567890" in out
         assert "@'" in out and "Set-Content" in out
         assert "$env:USERPROFILE\\.omp\\agent\\.env" in out
-        assert "omp usage" in out
+        assert "omp usage" in captured.err
 
     def test_export_bash_heredoc(self, reg_path, capsys):
         run(reg_path, "add", "openrouter", "--key", "or-key-123456789012")
@@ -251,21 +253,24 @@ class TestExport:
         reg_path.write_text(json.dumps(data), encoding="utf-8")
         capsys.readouterr()
         assert run(reg_path, "export") == 0
-        out = capsys.readouterr().out
+        captured = capsys.readouterr()
+        out = captured.out
+        err = captured.err
         assert "ANTHROPIC_API_KEY" not in out
         assert "ghost-key" not in out
-        assert "oauth token missing; run mar pull" in out
-        assert "unknown provider" in out
+        assert "oauth token missing; run mar pull" in err
+        assert "unknown provider" in err
+        assert "skipped" in err
 
     def test_export_antigravity_envless_note(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         run(reg_path, "add", "antigravity", "--key", "ag-key-123456789012")
         capsys.readouterr()
         assert run(reg_path, "export") == 0
-        out = capsys.readouterr().out
-        assert "no env route" in out
-        assert "/login google-antigravity" in out
-        assert "ag-key-123456789012" not in out  # never leaks the unexportable key
+        captured = capsys.readouterr()
+        assert "no env route" in captured.err
+        assert "/login google-antigravity" in captured.err
+        assert "ag-key-123456789012" not in captured.out  # unexportable key never prints
 
     def test_export_empty_registry_is_error(self, reg_path):
         assert run(reg_path, "export") == 1
@@ -382,10 +387,11 @@ class TestExportOauth:
         reg_path.write_text(json.dumps(data), encoding="utf-8")
         capsys.readouterr()
         assert run(reg_path, "export") == 0
-        out = capsys.readouterr().out
+        captured = capsys.readouterr()
+        out = captured.out
         assert "ANTHROPIC_OAUTH_TOKEN=anthropic-access-token-123" in out
         assert "ZAI_API_KEY=zai-key-1234567890" in out
-        assert "they EXPIRE" in out
+        assert "they EXPIRE" in captured.err
 
     def test_export_oauth_without_route_notes_login(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
@@ -405,10 +411,10 @@ class TestExportOauth:
         reg_path.write_text(json.dumps(data), encoding="utf-8")
         capsys.readouterr()
         assert run(reg_path, "export") == 0
-        out = capsys.readouterr().out
-        assert "no oauth env route" in out
-        assert "/login cursor" in out
-        assert "cursor-access-token-123456" not in out  # unexportable key never leaks
+        captured = capsys.readouterr()
+        assert "no oauth env route" in captured.err
+        assert "/login cursor" in captured.err
+        assert "cursor-access-token-123456" not in captured.out  # unexportable key never prints
 
 
 class TestTopLevel:
