@@ -204,6 +204,8 @@ class TestExport:
         capsys.readouterr()
         assert run(reg_path, "export") == 0
         out = capsys.readouterr().out
+        assert out.startswith(cli._EXPORT_BEGIN + "\n")
+        assert cli._EXPORT_END in out
         assert "ZAI_API_KEY=zai-key-1234567890" in out
         assert "CURSOR_ACCESS_TOKEN=cursor-key-1234567890" in out
         assert "@'" in out and "Set-Content" in out

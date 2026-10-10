@@ -18,6 +18,9 @@ from mar import __version__, bootstrap, limits, omp, providers, registry
 
 PROVIDER_IDS = providers.ids()
 
+_EXPORT_BEGIN = "# ================================================================ BEGIN =========================="
+_EXPORT_END = "# ================================================================ END ============================"
+
 
 def _now() -> str:
     """Return current UTC time as ISO 8601 string."""
@@ -308,7 +311,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if skipped:
         footer.append("# Not exportable:")
         footer.extend(skipped)
-    text = "\n".join([body, *footer]) + "\n"
+    text = "\n".join([_EXPORT_BEGIN, body, *footer, _EXPORT_END]) + "\n"
     if args.output:
         out_path = Path(args.output)
         out_path.write_text(text, encoding="utf-8")
