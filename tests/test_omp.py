@@ -17,6 +17,8 @@ from mar.omp import (
     OmpError,
     default_agent_dir,
     list_credentials,
+    read_model_roles,
+    read_oauth_credentials,
     set_model_role,
     upsert_credential,
     upsert_env_key,
@@ -318,6 +320,95 @@ def test_default_agent_dir_treats_blank_env_as_unset(
 ) -> None:
     monkeypatch.setenv("PI_CODING_AGENT_DIR", value)
     assert default_agent_dir() == Path.home() / ".omp" / "agent"
+
+
+# --- read_model_roles --------------------------------------------------------
+
+
+def test_read_model_roles_missing_file(tmp_path: Path) -> None:
+    assert read_model_roles(tmp_path) == {}
+
+
+def test_read_model_roles_round_trips(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text(
+        "shellPath: bash\nmodelRoles:\n  judge: typesafe/jev-latest\n  default: zai/glm\n",
+        encoding="utf-8",
+    )
+    roles = read_model_roles(tmp_path)
+    assert roles == {"judge": "typesafe/jev-latest", "default": "zai/glm"}
+
+
+def test_read_model_roles_without_key(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text("shellPath: bash\n", encoding="utf-8")
+    assert read_model_roles(tmp_path) == {}
+
+
+def test_read_model_roles_rejects_non_mapping(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text("modelRoles: [a, b]\n", encoding="utf-8")
+    with pytest.raises(OmpError):
+        read_model_roles(tmp_path)
+
+
+# --- read_oauth_credentials --------------------------------------------------
+
+
+def test_read_oauth_credentials_missing_db(tmp_path: Path) -> None:
+    assert read_oauth_credentials(tmp_path) == []
+
+
+def test_read_oauth_credentials_parses_rows(tmp_path: Path) -> None:
+    import sqlite3
+
+    (tmp_path / "agent").mkdir()
+    conn = sqlite3.connect(tmp_path / "agent" / "agent.db")
+    conn.execute(
+        "CREATE TABLE auth_credentials (provider TEXT, credential_type TEXT, data TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO auth_credentials VALUES ('anthropic', 'oauth', ?)",
+        (
+            json.dumps(
+                {
+                    "access": "tok-access",
+                    "refresh": "tok-refresh",
+                    "expires": 1791660887205,
+                    "email": "user@example.com",
+                    "orgName": "example org",
+                }
+            ),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO auth_credentials VALUES ('zai', 'api_key', '{\"key\": \"k\"}')"
+    )
+    conn.commit()
+    conn.close()
+
+    creds = read_oauth_credentials(tmp_path / "agent")
+    assert len(creds) == 1  # api_key rows ignored
+    cred = creds[0]
+    assert cred.provider == "anthropic"
+    assert cred.access == "tok-access"
+    assert cred.expires_ms == 1791660887205
+    assert cred.email == "user@example.com"
+    assert cred.org_name == "example org"
+
+
+def test_read_oauth_credentials_malformed_row_raises(tmp_path: Path) -> None:
+    import sqlite3
+
+    (tmp_path / "agent").mkdir()
+    conn = sqlite3.connect(tmp_path / "agent" / "agent.db")
+    conn.execute(
+        "CREATE TABLE auth_credentials (provider TEXT, credential_type TEXT, data TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO auth_credentials VALUES ('anthropic', 'oauth', '{nope')"
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(OmpError):
+        read_oauth_credentials(tmp_path / "agent")
 
 
 # --- upsert_env_key ----------------------------------------------------------

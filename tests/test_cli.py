@@ -197,6 +197,12 @@ class TestPrompt:
         assert "zai" in out_path.read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_agent_dir(tmp_path, monkeypatch):
+    """Keep export/pull from reading the real machine's omp config."""
+    monkeypatch.setattr(cli.omp, "default_agent_dir", lambda: tmp_path / "iso-agent")
+
+
 class TestExport:
     def test_export_powershell_contains_all_keys(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
@@ -274,6 +280,45 @@ class TestExport:
 
     def test_export_empty_registry_is_error(self, reg_path):
         assert run(reg_path, "export") == 1
+
+    def test_export_sets_model_roles_from_agent_config(self, reg_path, tmp_path, capsys):
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        (agent_dir / "config.yml").write_text(
+            "modelRoles:\n  judge: typesafe/jev-latest\n  default: zai/glm-5.3-flash:max\n",
+            encoding="utf-8",
+        )
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "modelRoles:" in out
+        assert "  judge: typesafe/jev-latest" in out
+        assert "  default: zai/glm-5.3-flash:max" in out
+        assert "Select-String" in out  # idempotent guard for existing configs
+        assert "role-set for judge, default" in captured.err
+
+    def test_export_roles_bash_variant(self, reg_path, tmp_path, capsys):
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        (agent_dir / "config.yml").write_text(
+            "modelRoles:\n  judge: typesafe/jev-latest\n", encoding="utf-8"
+        )
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        out = capsys.readouterr().out
+        assert "grep -q '^modelRoles:'" in out
+        assert "judge: typesafe/jev-latest" in out
+
+    def test_export_without_roles_has_no_role_block(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        assert "modelRoles" not in out
+        assert "role-set" not in capsys.readouterr().err
 
     def test_export_output_writes_file(self, reg_path, tmp_path):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")

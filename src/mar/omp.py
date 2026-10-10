@@ -28,6 +28,7 @@ __all__ = [
     "OmpError",
     "default_agent_dir",
     "list_credentials",
+    "read_model_roles",
     "read_oauth_credentials",
     "set_model_role",
     "upsert_credential",
@@ -329,6 +330,41 @@ def read_oauth_credentials(agent_dir: Path) -> list[OauthCredential]:
             )
         )
     return out
+
+
+def read_model_roles(agent_dir: Path) -> dict[str, str]:
+    """Read the ``modelRoles`` mapping from ``<agent_dir>/config.yml``.
+
+    Args:
+        agent_dir: omp agent directory whose ``config.yml`` is read.
+
+    Returns:
+        Role → model mapping in file order; empty dict when the file is
+        missing, empty, or has no ``modelRoles`` key.
+
+    Raises:
+        OmpError: If the file cannot be read/parsed or ``modelRoles`` is
+            not a string→string mapping.
+    """
+    config_path = agent_dir / "config.yml"
+    if not config_path.exists():
+        return {}
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise OmpError(f"failed to read {config_path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise OmpError(f"malformed YAML in {config_path}: {exc}") from exc
+    if not isinstance(config, dict) or "modelRoles" not in config:
+        return {}
+    roles = config["modelRoles"]
+    if roles is None:
+        return {}
+    if not isinstance(roles, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in roles.items()
+    ):
+        raise OmpError(f"{config_path} has a non-string modelRoles mapping")
+    return dict(roles)
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

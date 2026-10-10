@@ -90,6 +90,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--shell", choices=("powershell", "bash"), default="powershell",
         help="target shell for the pastable (default: powershell)",
     )
+    p_exp.add_argument(
+        "--agent-dir", default=None, metavar="PATH",
+        help="omp agent dir to read modelRoles from (default: this machine's)",
+    )
     p_exp.add_argument("--output", default=None, metavar="PATH", help="write pastable to file instead of stdout")
     p_exp.add_argument("--registry", default=None, metavar="PATH")
     p_exp.set_defaults(func=_cmd_export)
@@ -302,6 +306,71 @@ def _cmd_export(args: argparse.Namespace) -> int:
             "includes OAuth tokens: they EXPIRE; re-run `mar pull && mar export` to refresh"
         )
     notes.extend(skipped)
+
+    role_lines: list[str] = []
+    roles: dict[str, str] = {}
+    try:
+        roles = omp.read_model_roles(
+            Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
+        )
+    except omp.OmpError as exc:
+        notes.append(f"model roles not exported: {exc}")
+    if roles:
+        role_lines = [f"  {role}: {model}" for role, model in roles.items()]
+        notes.append(
+            "role-set for "
+            + ", ".join(roles)
+            + " (config.yml; skipped there if modelRoles already exists)"
+        )
+    if args.shell == "powershell":
+        body = "\n".join(
+            [
+                'New-Item -ItemType Directory -Force "$env:USERPROFILE\\.omp\\agent" | Out-Null',
+                "@'",
+                *lines,
+                "'@ | Set-Content \"$env:USERPROFILE\\.omp\\agent\\.env\" -Encoding ascii",
+            ]
+        )
+        if role_lines:
+            body = "\n".join(
+                [
+                    body,
+                    "$cfg = \"$env:USERPROFILE\\.omp\\agent\\config.yml\"",
+                    "$roles = @'",
+                    "modelRoles:",
+                    *role_lines,
+                    "'@",
+                    "if (-not (Test-Path $cfg)) { Set-Content $cfg $roles -Encoding ascii }",
+                    "else {",
+                    "  if (-not (Select-String -Path $cfg -Pattern '(?m)^modelRoles:' -Quiet)) {",
+                    "    if ((Get-Content $cfg -Raw).EndsWith(\"`n\") -eq $false) { Add-Content $cfg '' }",
+                    "    Add-Content $cfg $roles",
+                    "  }",
+                    "}",
+                ]
+            )
+    else:
+        body = "\n".join(
+            [
+                "mkdir -p ~/.omp/agent",
+                "cat > ~/.omp/agent/.env <<'MAR_EOF'",
+                *lines,
+                "MAR_EOF",
+            ]
+        )
+        if role_lines:
+            roles_text = "\\n".join(["modelRoles:", *role_lines])
+            body = "\n".join(
+                [
+                    body,
+                    'cfg="$HOME/.omp/agent/config.yml"',
+                    "if [ ! -f \"$cfg\" ]; then",
+                    f"  printf '{roles_text}\\n' > \"$cfg\"",
+                    "elif ! grep -q '^modelRoles:' \"$cfg\"; then",
+                    f"  printf '\\n{roles_text}\\n' >> \"$cfg\"",
+                    "fi",
+                ]
+            )
     text = f"{_EXPORT_BEGIN}\n{body}\n{_EXPORT_END}\n"
     for note in notes:
         print(f"mar: {note}", file=sys.stderr)
