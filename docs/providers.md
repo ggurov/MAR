@@ -30,9 +30,6 @@ Notes:
   `omp --model typesafe/jev-latest` is intentionally "not found". On fresh
   machines add the role with
   `mar omp-sync --set-role judge=typesafe/jev-latest`.
-
-Notes:
-
 - `cursor-grok` is one subscription line in the problem statement; kept as one
   catalog entry. omp's `cursor` provider is OAuth-first; the `crsr_` token is
   written to the agent dir's `.env` (documented env fallback), which omp picks
