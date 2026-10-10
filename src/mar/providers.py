@@ -1,4 +1,4 @@
-"""Static catalog of the user's 9 AI providers + integrity validation.
+"""Static catalog of the user's 10 AI providers + integrity validation.
 
 Editorial source: docs/providers.md (kept in sync with it). The catalog is the
 single place MAR learns provider facts from; it never invents defaults or
@@ -236,6 +236,25 @@ CATALOG: tuple[Provider, ...] = (
         verified=True,
         notes="omp id + env confirmed in omp's provider roster (2026-10-10).",
     ),
+    Provider(
+        id="jev",
+        display="Jev (Typesafe)",
+        auth_methods=("api_key",),
+        key_url="https://typesafe.ai",
+        limits_url="https://typesafe.ai",
+        signup_url="https://typesafe.ai",
+        omp_provider_id="typesafe",
+        omp_env_var="",
+        export_env_var="TYPESAFE_API_KEY",
+        export_oauth_env_var="",
+        default_model=None,
+        limits_kind="manual",
+        verified=True,
+        notes=(
+            "Judge-kind models (jev-latest, jev-preview) wired to omp's "
+            "modelRoles.judge; NOT chat-selectable. Env confirmed in omp's "
+            "provider roster and live in the user's environment."),
+    ),
 )
 
 
@@ -243,7 +262,7 @@ def ids() -> tuple[str, ...]:
     """Return the catalog ids in their fixed, documented order.
 
     Returns:
-        Tuple of provider ids, exactly the 9 lines of docs/providers.md.
+        Tuple of provider ids, exactly the 10 lines of docs/providers.md.
     """
     return tuple(provider.id for provider in CATALOG)
 

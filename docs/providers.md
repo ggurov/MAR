@@ -1,7 +1,8 @@
 # Provider catalog data
 
-The 9 lines below are the user's subscriptions (problem statement minus
-codebuddy, dropped by the user). Editorial source for `src/mar/providers.py`;
+The 10 lines below are the user's subscriptions (problem statement minus
+codebuddy, dropped by the user; plus `jev`, the Typesafe judge model that
+backs omp's `modelRoles.judge`). Editorial source for `src/mar/providers.py`;
 keep both in sync.
 
 Verification: every omp id/env var below was confirmed against omp's official
@@ -20,6 +21,15 @@ ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
 | 7 | openrouter | OpenRouter | openrouter | agent.db login row | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | api |
 | 8 | antigravity | Google Antigravity | google-antigravity | agent.db (OAuth-first) | https://antigravity.google | https://antigravity.google | manual |
 | 9 | copilot | GitHub Copilot | github-copilot | env `COPILOT_GITHUB_TOKEN` | https://github.com/settings/tokens | https://github.com/settings/copilot | manual |
+| 10 | jev | Jev (Typesafe) | typesafe | env `TYPESAFE_API_KEY` | https://typesafe.ai | https://typesafe.ai | manual |
+
+Notes:
+
+- `jev` is judge-kind infrastructure, not a chat model: omp wires
+  `typesafe/jev-latest` (and `jev-preview`) to `modelRoles.judge` only —
+  `omp --model typesafe/jev-latest` is intentionally "not found". On fresh
+  machines add the role with
+  `mar omp-sync --set-role judge=typesafe/jev-latest`.
 
 Notes:
 

@@ -22,6 +22,7 @@ EXPECTED_IDS = (
     "openrouter",
     "antigravity",
     "copilot",
+    "jev",
 )
 
 UNVERIFIED_IDS: set[str] = set()
@@ -50,6 +51,7 @@ ENV_VARS = {
     "openrouter": "",
     "antigravity": "",
     "copilot": "COPILOT_GITHUB_TOKEN",
+    "jev": "",
 }
 
 OAUTH_ENV_VARS = {
@@ -62,6 +64,7 @@ OAUTH_ENV_VARS = {
     "openrouter": "",
     "antigravity": "",
     "copilot": "",
+    "jev": "",
 }
 
 EXPORT_KEY_ENV_VARS = {
@@ -74,6 +77,7 @@ EXPORT_KEY_ENV_VARS = {
     "openrouter": "OPENROUTER_API_KEY",
     "antigravity": "",
     "copilot": "COPILOT_GITHUB_TOKEN",
+    "jev": "TYPESAFE_API_KEY",
 }
 
 URL_FIELDS = ("key_url", "limits_url", "signup_url")
@@ -82,7 +86,7 @@ URL_FIELDS = ("key_url", "limits_url", "signup_url")
 def test_ids_returns_exact_catalog_in_order():
     assert ids() == EXPECTED_IDS
     assert tuple(p.id for p in CATALOG) == EXPECTED_IDS
-    assert len(CATALOG) == 9
+    assert len(CATALOG) == 10
 
 
 def test_get_returns_matching_provider():
@@ -118,7 +122,7 @@ def test_unverified_is_empty_every_entry_confirmed():
     assert all(p.verified for p in CATALOG)
 
 
-def test_verified_are_all_nine_roster_confirmed_providers():
+def test_verified_are_all_ten_roster_confirmed_providers():
     assert {p.id for p in CATALOG if p.verified} == VERIFIED_IDS
 
 
