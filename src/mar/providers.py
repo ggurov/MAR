@@ -49,6 +49,9 @@ class Provider:
             sync route) — e.g. providers MAR syncs as agent.db rows still
             have documented env aliases. Empty means the provider has no
             env route (OAuth-only); export tells the user to ``/login``.
+        export_oauth_env_var: Environment variable for this provider's
+            OAuth access token on any machine (``mar pull`` + ``mar
+            export``). Empty means no documented OAuth env route.
         default_model: Always None — the user picks the default at
             ``mar add`` time; the catalog never invents one.
         limits_kind: ``"api"`` (real fetcher exists) or ``"manual"``
@@ -67,6 +70,7 @@ class Provider:
     omp_provider_id: str
     omp_env_var: str
     export_env_var: str
+    export_oauth_env_var: str
     default_model: str | None
     limits_kind: str
     verified: bool
@@ -84,6 +88,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="cursor",
         omp_env_var="CURSOR_ACCESS_TOKEN",
         export_env_var="CURSOR_ACCESS_TOKEN",
+        export_oauth_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -102,7 +107,8 @@ CATALOG: tuple[Provider, ...] = (
         signup_url="https://platform.openai.com/signup",
         omp_provider_id="openai-codex",
         omp_env_var="OPENAI_CODEX_OAUTH_TOKEN",
-        export_env_var="OPENAI_CODEX_OAUTH_TOKEN",
+        export_env_var="",
+        export_oauth_env_var="OPENAI_CODEX_OAUTH_TOKEN",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -118,6 +124,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="anthropic",
         omp_env_var="ANTHROPIC_API_KEY",
         export_env_var="ANTHROPIC_API_KEY",
+        export_oauth_env_var="ANTHROPIC_OAUTH_TOKEN",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -133,6 +140,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="cline-pass",
         omp_env_var="",
         export_env_var="CLINE_API_KEY",
+        export_oauth_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -150,6 +158,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="opencode-go",
         omp_env_var="",
         export_env_var="OPENCODE_API_KEY",
+        export_oauth_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -167,6 +176,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="zai",
         omp_env_var="",
         export_env_var="ZAI_API_KEY",
+        export_oauth_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -184,6 +194,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="openrouter",
         omp_env_var="",
         export_env_var="OPENROUTER_API_KEY",
+        export_oauth_env_var="",
         default_model=None,
         limits_kind="api",
         verified=True,
@@ -203,6 +214,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="google-antigravity",
         omp_env_var="",
         export_env_var="",
+        export_oauth_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -218,6 +230,7 @@ CATALOG: tuple[Provider, ...] = (
         omp_provider_id="github-copilot",
         omp_env_var="COPILOT_GITHUB_TOKEN",
         export_env_var="COPILOT_GITHUB_TOKEN",
+        export_oauth_env_var="",
         default_model=None,
         limits_kind="manual",
         verified=True,
@@ -313,6 +326,13 @@ def validate(catalog: Sequence[Provider] = CATALOG) -> list[str]:
             problems.append(
                 f"provider '{pid}': omp_env_var '{provider.omp_env_var}' "
                 f"does not match {_ENV_PATTERN}"
+            )
+        if provider.export_oauth_env_var and not _ENV_RE.match(
+            provider.export_oauth_env_var
+        ):
+            problems.append(
+                f"provider '{pid}': export_oauth_env_var "
+                f"'{provider.export_oauth_env_var}' does not match {_ENV_PATTERN}"
             )
     return problems
 

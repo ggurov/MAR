@@ -52,6 +52,7 @@ graph LR
 | M8 | Per-provider limit fetchers | Real endpoints researched and implemented one provider at a time (Codex usage, Anthropic admin usage, GitHub Copilot entitlements, …); until then `omp usage` already reports cline/opencode/zai quota windows | planned |
 | M9 | `mar doctor` | Catalog verification report: which omp provider ids are confirmed, which URLs resolve; also reconcile orphaned `.env` vars when a provider's credential route changes | planned |
 | M10 | `mar export` | Zero-install pastable (PowerShell/bash) writing omp's agent `.env` from the registry via omp's documented env routes; skips no-route/oauth providers with `/login` hints; `--output` writes 0600 | done |
+| M11 | `mar pull` + OAuth export | Adopt omp OAuth logins (anthropic, openai-codex — live data shape `access/refresh/expires` verified 2026-10-10) into the registry preserving models/defaults; export emits `ANTHROPIC_OAUTH_TOKEN` / `OPENAI_CODEX_OAUTH_TOKEN`; expiry warned in output. Access tokens are NOT refreshable via env — re-pull + re-export when they die (anthropic ≈ 8h, codex ≈ 10d) | done |
 
 ## Slice ownership (for parallel agent work)
 

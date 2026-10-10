@@ -252,7 +252,7 @@ class TestExport:
         out = capsys.readouterr().out
         assert "ANTHROPIC_API_KEY" not in out
         assert "ghost-key" not in out
-        assert "no api key stored" in out
+        assert "oauth token missing; run mar pull" in out
         assert "unknown provider" in out
 
     def test_export_antigravity_envless_note(self, reg_path, capsys):
@@ -273,6 +273,140 @@ class TestExport:
         out_path = tmp_path / "pastable.ps1"
         assert run(reg_path, "export", "--output", str(out_path)) == 0
         assert "ZAI_API_KEY=zai-key-1234567890" in out_path.read_text(encoding="utf-8")
+
+
+class TestPull:
+    @pytest.fixture()
+    def agent_db(self, tmp_path):
+        """omp agent dir with the live schema, one oauth + one api_key row."""
+        import sqlite3
+
+        from mar.omp import upsert_credential
+
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        conn = sqlite3.connect(agent_dir / "agent.db")
+        conn.execute(
+            "CREATE TABLE auth_credentials ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, "
+            "credential_type TEXT NOT NULL, data TEXT NOT NULL, "
+            "disabled_cause TEXT DEFAULT NULL, identity_key TEXT DEFAULT NULL, "
+            "created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0)"
+        )
+        conn.execute(
+            "INSERT INTO auth_credentials (provider, credential_type, data) VALUES (?, ?, ?)",
+            (
+                "anthropic",
+                "oauth",
+                json.dumps(
+                    {
+                        "access": "anthropic-access-token-123",
+                        "refresh": "anthropic-refresh-token-123",
+                        "expires": 1791660887205,
+                        "authorizedAt": 1791632387205,
+                        "email": "user@example.com",
+                        "accountId": "acct-1",
+                        "orgId": "org-1",
+                        "orgName": "example org",
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO auth_credentials (provider, credential_type, data) VALUES (?, ?, ?)",
+            ("mystery-provider", "oauth", json.dumps({"access": "mystery-token-12345"})),
+        )
+        conn.commit()
+        conn.close()
+        upsert_credential(agent_dir, "zai", "zai-db-key-123456789")
+        return agent_dir
+
+    def test_pull_adopts_oauth_rows_into_registry(self, reg_path, agent_db, capsys):
+        assert run(reg_path, "pull", "--agent-dir", str(agent_db)) == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        subs = {s["provider"]: s for s in data["subscriptions"]}
+        assert subs["claude"]["auth_method"] == "oauth"
+        assert subs["claude"]["key"] == "anthropic-access-token-123"
+        assert "expires 2026-10-10T19:34Z" in subs["claude"]["notes"]
+        assert "user@example.com" in subs["claude"]["notes"]
+        out = capsys.readouterr().out
+        assert "pulled: claude (anthropic)" in out
+
+    def test_pull_skips_unknown_omp_provider_and_api_rows(self, reg_path, agent_db, capsys):
+        assert run(reg_path, "pull", "--agent-dir", str(agent_db)) == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        subs = {s["provider"]: s for s in data["subscriptions"]}
+        assert "zai" not in subs  # api_key rows are not adopted
+        err = capsys.readouterr().err
+        assert "mystery-provider" in err
+
+    def test_pull_replaces_instead_of_duplicating(self, reg_path, agent_db):
+        run(reg_path, "pull", "--agent-dir", str(agent_db))
+        assert run(reg_path, "pull", "--agent-dir", str(agent_db)) == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        assert [s["provider"] for s in data["subscriptions"]].count("claude") == 1
+
+    def test_pull_preserves_models_on_existing_sub(self, reg_path, agent_db):
+        run(reg_path, "add", "claude", "--key", "claude-key-12345678901", "--default", "claude-haiku")
+        assert run(reg_path, "pull", "--agent-dir", str(agent_db)) == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        sub = next(s for s in data["subscriptions"] if s["provider"] == "claude")
+        assert sub["default_model"] == "claude-haiku"
+        assert sub["auth_method"] == "oauth"
+
+    def test_pull_with_no_oauth_rows_is_error(self, reg_path, tmp_path):
+        empty = tmp_path / "empty-agent"
+        empty.mkdir()
+        assert run(reg_path, "pull", "--agent-dir", str(empty)) == 1
+
+
+class TestExportOauth:
+    def test_export_includes_oauth_tokens_with_warning(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        # hand-edit registry to hold an oauth claude sub (as mar pull writes it)
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        data["subscriptions"].append(
+            {
+                "provider": "claude",
+                "auth_method": "oauth",
+                "key": "anthropic-access-token-123",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "oauth via mar pull",
+            }
+        )
+        reg_path.write_text(json.dumps(data), encoding="utf-8")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        assert "ANTHROPIC_OAUTH_TOKEN=anthropic-access-token-123" in out
+        assert "ZAI_API_KEY=zai-key-1234567890" in out
+        assert "they EXPIRE" in out
+
+    def test_export_oauth_without_route_notes_login(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        data["subscriptions"].append(
+            {
+                "provider": "cursor-grok",
+                "auth_method": "oauth",
+                "key": "cursor-access-token-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+            }
+        )
+        reg_path.write_text(json.dumps(data), encoding="utf-8")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        assert "no oauth env route" in out
+        assert "/login cursor" in out
+        assert "cursor-access-token-123456" not in out  # unexportable key never leaks
 
 
 class TestTopLevel:

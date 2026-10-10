@@ -18,14 +18,17 @@ import json
 import os
 import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 __all__ = [
+    "OauthCredential",
     "OmpError",
     "default_agent_dir",
     "list_credentials",
+    "read_oauth_credentials",
     "set_model_role",
     "upsert_credential",
     "upsert_env_key",
@@ -251,6 +254,81 @@ def upsert_env_key(agent_dir: Path, var: str, key: str) -> None:
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except OSError as exc:
         raise OmpError(f"failed to write {env_path}: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class OauthCredential:
+    """One OAuth credential row read from omp's agent.db.
+
+    Attributes:
+        provider: omp provider id (e.g. ``anthropic``, ``openai-codex``).
+        access: Bearer access token as stored by omp.
+        expires_ms: Token expiry as epoch milliseconds (0 when unknown).
+        email: Account email omp recorded ("" when absent).
+        org_name: Account/org label omp recorded ("" when absent).
+    """
+
+    provider: str
+    access: str
+    expires_ms: int
+    email: str
+    org_name: str
+
+
+def read_oauth_credentials(agent_dir: Path) -> list[OauthCredential]:
+    """Read every OAuth credential row from ``<agent_dir>/agent.db``.
+
+    omp stores OAuth logins with ``credential_type = 'oauth'`` and a JSON
+    ``data`` payload containing ``access``/``refresh``/``expires`` (epoch
+    milliseconds) plus account metadata — shape verified live 2026-10-10.
+    Only the access token is exposed; refresh tokens stay in omp's store.
+
+    Args:
+        agent_dir: omp agent directory containing ``agent.db``.
+
+    Returns:
+        Credentials ordered by provider id; empty when the db or table is
+        missing.
+
+    Raises:
+        OmpError: If the database cannot be opened or rows are malformed.
+    """
+    db_path = agent_dir / "agent.db"
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            if not _table_exists(conn):
+                return []
+            rows = conn.execute(
+                "SELECT provider, data FROM auth_credentials "
+                "WHERE credential_type = 'oauth' ORDER BY provider"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise OmpError(f"failed to read {db_path}: {exc}") from exc
+    out: list[OauthCredential] = []
+    for provider, data in rows:
+        try:
+            payload = json.loads(data)
+            access = payload["access"]
+            expires = int(payload.get("expires", 0))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise OmpError(
+                f"malformed oauth credential for {provider!r} in {db_path}: {exc}"
+            ) from exc
+        out.append(
+            OauthCredential(
+                provider=provider,
+                access=access,
+                expires_ms=expires,
+                email=str(payload.get("email", "")),
+                org_name=str(payload.get("orgName", "")),
+            )
+        )
+    return out
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

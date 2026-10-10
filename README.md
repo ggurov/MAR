@@ -27,6 +27,7 @@ graph LR
 | `mar omp-sync [--set-role role=model]` | Writes every stored key into omp's credential store; optionally sets `modelRoles` |
 | `mar prompt` | Prints THE startup prompt to paste into a fresh omp install |
 | `mar export [--shell bash]` | Emits a zero-install pastable (agent `.env`) to configure omp on a machine without MAR — contains keys, handle accordingly |
+| `mar pull` | Adopt OAuth logins (Claude, Codex) from the local omp install into the registry, so `mar export` can carry them |
 | `mar remove <provider>` | Forget a subscription |
 
 ## Quickstart

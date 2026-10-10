@@ -91,6 +91,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_exp.add_argument("--registry", default=None, metavar="PATH")
     p_exp.set_defaults(func=_cmd_export)
 
+    p_pull = sub.add_parser(
+        "pull",
+        help="adopt OAuth logins from the local omp install into the registry",
+    )
+    p_pull.add_argument("--agent-dir", default=None, metavar="PATH")
+    p_pull.add_argument("--registry", default=None, metavar="PATH")
+    p_pull.set_defaults(func=_cmd_pull)
+
     return parser
 
 
@@ -229,7 +237,26 @@ def _cmd_export(args: argparse.Namespace) -> int:
     reg = _load(args.registry)
     pairs: list[tuple[str, str]] = []
     skipped: list[str] = []
+    oauth_used = False
     for sub in reg.active():
+        if sub.auth_method == "oauth":
+            try:
+                provider = providers.get(sub.provider)
+            except KeyError:
+                skipped.append(f"#   {sub.provider}: unknown provider (not in catalog)")
+                continue
+            if not sub.key:
+                skipped.append(f"#   {sub.provider}: oauth token missing; run mar pull")
+                continue
+            if not provider.export_oauth_env_var:
+                skipped.append(
+                    f"#   {sub.provider}: no oauth env route in omp; run /login "
+                    f"{provider.omp_provider_id} there"
+                )
+                continue
+            pairs.append((provider.export_oauth_env_var, sub.key))
+            oauth_used = True
+            continue
         if sub.auth_method != "api_key" or not sub.key:
             skipped.append(f"#   {sub.provider}: no api key stored")
             continue
@@ -273,6 +300,11 @@ def _cmd_export(args: argparse.Namespace) -> int:
         "# Then verify and start:  omp usage    omp --yolo",
         f"# Exported {len(pairs)} credential(s) from MAR ({args.shell}).",
     ]
+    if oauth_used:
+        footer.append(
+            "# Includes OAuth tokens: they EXPIRE. When they do, re-run `mar pull && mar export`"
+        )
+        footer.append("# on the MAR machine and paste the new block (omp refreshes only its own store).")
     if skipped:
         footer.append("# Not exportable:")
         footer.extend(skipped)
@@ -288,6 +320,62 @@ def _cmd_export(args: argparse.Namespace) -> int:
     else:
         print(text, end="")
     return 0
+
+
+def _cmd_pull(args: argparse.Namespace) -> int:
+    agent_dir = Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
+    creds = omp.read_oauth_credentials(agent_dir)
+    if not creds:
+        return _err(f"no oauth credentials found in {agent_dir / 'agent.db'}")
+    by_omp_id = {p.omp_provider_id: p for p in providers.CATALOG if p.omp_provider_id}
+    reg = _load(args.registry)
+    pulled = 0
+    seen: set[str] = set()
+    for cred in creds:
+        provider = by_omp_id.get(cred.provider)
+        if provider is None:
+            print(f"skipped: {cred.provider} (not in MAR catalog)", file=sys.stderr)
+            continue
+        if provider.id in seen:
+            print(
+                f"skipped: {cred.provider} (duplicate account; registry holds one per provider)",
+                file=sys.stderr,
+            )
+            continue
+        seen.add(provider.id)
+        expires = ""
+        if cred.expires_ms:
+            expires = datetime.fromtimestamp(cred.expires_ms / 1000, UTC).strftime(
+                "%Y-%m-%dT%H:%MZ"
+            )
+        notes = f"oauth via mar pull ({cred.email}"
+        if cred.org_name:
+            notes += f" @ {cred.org_name}"
+        notes += ")"
+        if expires:
+            notes += f"; expires {expires}; re-pull to refresh"
+        try:
+            old = reg.get(provider.id)
+        except KeyError:
+            old = None
+        else:
+            reg.remove(provider.id)
+        reg.add(
+            registry.Subscription(
+                provider=provider.id,
+                auth_method="oauth",
+                key=cred.access,
+                models=old.models if old else [],
+                default_model=old.default_model if old else None,
+                added_at=_now(),
+                status=old.status if old else "active",
+                notes=notes,
+            )
+        )
+        pulled += 1
+        print(f"pulled: {provider.id} ({cred.provider}) — expires {expires or 'unknown'}")
+    reg.save()
+    return 0 if pulled else 1
 
 
 def main(argv: list[str] | None = None) -> int:

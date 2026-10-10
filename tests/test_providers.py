@@ -52,6 +52,30 @@ ENV_VARS = {
     "copilot": "COPILOT_GITHUB_TOKEN",
 }
 
+OAUTH_ENV_VARS = {
+    "cursor-grok": "",
+    "codex": "OPENAI_CODEX_OAUTH_TOKEN",
+    "claude": "ANTHROPIC_OAUTH_TOKEN",
+    "cline": "",
+    "opencode": "",
+    "zai": "",
+    "openrouter": "",
+    "antigravity": "",
+    "copilot": "",
+}
+
+EXPORT_KEY_ENV_VARS = {
+    "cursor-grok": "CURSOR_ACCESS_TOKEN",
+    "codex": "",
+    "claude": "ANTHROPIC_API_KEY",
+    "cline": "CLINE_API_KEY",
+    "opencode": "OPENCODE_API_KEY",
+    "zai": "ZAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "antigravity": "",
+    "copilot": "COPILOT_GITHUB_TOKEN",
+}
+
 URL_FIELDS = ("key_url", "limits_url", "signup_url")
 
 
@@ -106,6 +130,16 @@ def test_omp_ids_match_official_roster(provider_id, omp_id):
 @pytest.mark.parametrize(("provider_id", "env_var"), sorted(ENV_VARS.items()))
 def test_omp_env_vars_match_official_roster(provider_id, env_var):
     assert get(provider_id).omp_env_var == env_var
+
+
+@pytest.mark.parametrize(("provider_id", "env_var"), sorted(OAUTH_ENV_VARS.items()))
+def test_export_oauth_env_vars_match_official_roster(provider_id, env_var):
+    assert get(provider_id).export_oauth_env_var == env_var
+
+
+@pytest.mark.parametrize(("provider_id", "env_var"), sorted(EXPORT_KEY_ENV_VARS.items()))
+def test_export_key_env_vars_match_official_roster(provider_id, env_var):
+    assert get(provider_id).export_env_var == env_var
 
 
 def test_limits_kind_api_applies_only_to_openrouter():

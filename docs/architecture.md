@@ -140,6 +140,25 @@ into the registry and must not leak).
 - This repo must never contain real keys: tests use fake fixtures, `.mar/` is
   gitignored.
 
+## OAuth tokens (pull + export)
+
+**verified** — omp stores OAuth logins in the same `auth_credentials` table
+with `credential_type = 'oauth'` and JSON payload
+`{"access", "refresh", "expires" (epoch ms), "authorizedAt", "email",
+"accountId", "orgId", "orgName"}` (anthropic + openai-codex, 2026-10-10).
+
+- `mar pull` reads those rows (`omp.read_oauth_credentials`), maps
+  `provider` → catalog id via `omp_provider_id`, and upserts registry subs
+  with `auth_method="oauth"`, `key=access`, notes carrying account + expiry.
+  Refresh tokens stay in omp's store — they are never copied into MAR.
+- `mar export` emits OAuth subs as `export_oauth_env_var` lines:
+  `ANTHROPIC_OAUTH_TOKEN`, `OPENAI_CODEX_OAUTH_TOKEN` (documented omp env
+  routes). omp on the target machine reads them from `.env` but CANNOT
+  refresh them — env credentials have no refresh flow. Access-token
+  lifetimes observed: anthropic ≈ 8h, openai-codex ≈ 10d. The source
+  machine's omp refreshes its stored copy automatically; re-run
+  `mar pull && mar export` to refresh the pastable.
+
 ## Verification log
 
 - 2026-10-10: inspected live `~/.omp/agent/agent.db` (`auth_credentials`
@@ -156,3 +175,9 @@ into the registry and must not leak).
   zai; `omp models find` listed 568 openrouter and 123 cursor models;
   `omp --model zai/glm-5.3-flash` completed a one-shot inference. No omp
   code was modified — configuration only.
+- 2026-10-10: pastable-only proof (bare machine: no MAR, no agent.db, only
+  `mar export` output applied via PowerShell): `omp usage` live for
+  cline/opencode/zai; one-shot inference via
+  `anthropic/claude-haiku-4-5` (`ANTHROPIC_OAUTH_TOKEN` env) and
+  `openai-codex/gpt-5.6-luna` (`OPENAI_CODEX_OAUTH_TOKEN` env) both
+  succeeded.
