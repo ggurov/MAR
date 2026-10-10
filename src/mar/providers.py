@@ -1,4 +1,4 @@
-"""Static catalog of the user's 10 AI providers + integrity validation.
+"""Static catalog of the user's 11 AI providers + integrity validation.
 
 Editorial source: docs/providers.md (kept in sync with it). The catalog is the
 single place MAR learns provider facts from; it never invents defaults or
@@ -255,6 +255,22 @@ CATALOG: tuple[Provider, ...] = (
             "modelRoles.judge; NOT chat-selectable. Env confirmed in omp's "
             "provider roster and live in the user's environment."),
     ),
+    Provider(
+        id="gemini",
+        display="Google Gemini",
+        auth_methods=("api_key",),
+        key_url="https://aistudio.google.com/api/keys",
+        limits_url="https://aistudio.google.com/usage",
+        signup_url="https://aistudio.google.com/",
+        omp_provider_id="google",
+        omp_env_var="",
+        export_env_var="GEMINI_API_KEY",
+        export_oauth_env_var="",
+        default_model=None,
+        limits_kind="manual",
+        verified=True,
+        notes="omp id + env confirmed in omp's provider roster (2026-10-10).",
+    ),
 )
 
 
@@ -262,7 +278,7 @@ def ids() -> tuple[str, ...]:
     """Return the catalog ids in their fixed, documented order.
 
     Returns:
-        Tuple of provider ids, exactly the 10 lines of docs/providers.md.
+        Tuple of provider ids, exactly the 11 lines of docs/providers.md.
     """
     return tuple(provider.id for provider in CATALOG)
 
