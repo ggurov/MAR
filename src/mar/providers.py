@@ -244,7 +244,7 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://typesafe.ai",
         signup_url="https://typesafe.ai",
         omp_provider_id="typesafe",
-        omp_env_var="",
+        omp_env_var="TYPESAFE_API_KEY",
         export_env_var="TYPESAFE_API_KEY",
         export_oauth_env_var="",
         default_model=None,
@@ -263,7 +263,7 @@ CATALOG: tuple[Provider, ...] = (
         limits_url="https://aistudio.google.com/usage",
         signup_url="https://aistudio.google.com/",
         omp_provider_id="google",
-        omp_env_var="",
+        omp_env_var="GEMINI_API_KEY",
         export_env_var="GEMINI_API_KEY",
         export_oauth_env_var="",
         default_model=None,
@@ -274,6 +274,26 @@ CATALOG: tuple[Provider, ...] = (
             "models list (Google publishes no usage API for AI Studio keys; "
             "usage is visible only in the AI Studio UI). omp id + env "
             "confirmed in omp's provider roster (2026-10-10)."),
+    ),
+    Provider(
+        id="commandcode",
+        display="Command Code",
+        auth_methods=("api_key",),
+        key_url="https://commandcode.ai",
+        limits_url="https://commandcode.ai",
+        signup_url="https://commandcode.ai",
+        omp_provider_id="commandcode",
+        omp_env_var="COMMAND_CODE_API_KEY",
+        export_env_var="COMMAND_CODE_API_KEY",
+        export_oauth_env_var="",
+        default_model=None,
+        limits_kind="manual",
+        verified=True,
+        notes=(
+            "omp id + env confirmed in omp's provider roster and model cache "
+            "(2026-10-10; 88 models: Claude/DeepSeek/GPT lines). omp usage "
+            "reports credit balance + 5h/weekly windows; keys validated "
+            "against /alpha/whoami."),
     ),
 )
 

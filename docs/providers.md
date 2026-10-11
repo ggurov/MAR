@@ -1,9 +1,9 @@
 # Provider catalog data
 
-The 11 lines below are the user's subscriptions (problem statement minus
+The 12 lines below are the user's subscriptions (problem statement minus
 codebuddy, dropped by the user; plus `jev`, the Typesafe judge model that
-backs omp's `modelRoles.judge`; plus `gemini`). Editorial source for
-`src/mar/providers.py`; keep both in sync.
+backs omp's `modelRoles.judge`; plus `gemini` and `commandcode`). Editorial
+source for `src/mar/providers.py`; keep both in sync.
 
 Verification: every omp id/env var below was confirmed against omp's official
 provider roster (omp://providers.md, 2026-10-10); `cline`, `opencode`, `zai`
@@ -23,6 +23,7 @@ ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
 | 9 | copilot | GitHub Copilot | github-copilot | env `COPILOT_GITHUB_TOKEN` | https://github.com/settings/tokens | https://github.com/settings/copilot | manual |
 | 10 | jev | Jev (Typesafe) | typesafe | env `TYPESAFE_API_KEY` | https://typesafe.ai | https://typesafe.ai | manual |
 | 11 | gemini | Google Gemini | google | env `GEMINI_API_KEY` | https://aistudio.google.com/api/keys | https://aistudio.google.com/usage | manual |
+| 12 | commandcode | Command Code | commandcode | env `COMMAND_CODE_API_KEY` | https://commandcode.ai | https://commandcode.ai | manual |
 
 Notes:
 
