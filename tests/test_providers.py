@@ -67,7 +67,7 @@ OAUTH_ENV_VARS = {
     "zai": "",
     "openrouter": "",
     "antigravity": "",
-    "copilot": "",
+    "copilot": "COPILOT_GITHUB_TOKEN",
     "jev": "",
     "gemini": "",
     "commandcode": "",
