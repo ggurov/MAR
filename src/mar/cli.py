@@ -309,6 +309,34 @@ def _cmd_export(args: argparse.Namespace) -> int:
         )
     notes.extend(skipped)
 
+    # Pass through non-credential env lines from the local agent .env (e.g.
+    # LM_STUDIO_BASE_URL for a LAN LM Studio). Provider credential vars are
+    # excluded — the registry is authoritative for those and stale local
+    # copies must not leak or shadow rotated keys.
+    provider_env_vars = {
+        var
+        for p in providers.CATALOG
+        for var in (p.omp_env_var, p.export_env_var, p.export_oauth_env_var)
+        if var
+    }
+    source_agent_dir = Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
+    extra_lines: list[str] = []
+    local_env = source_agent_dir / ".env"
+    if local_env.exists():
+        for raw in local_env.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name = line.split("=", 1)[0].strip().removeprefix("export ").strip()
+            if name and name not in provider_env_vars:
+                extra_lines.append(line)
+        if extra_lines:
+            lines.extend(extra_lines)
+            notes.append(
+                "carried local env override(s): "
+                + ", ".join(sorted(line.split("=", 1)[0] for line in extra_lines))
+            )
+
     role_lines: list[str] = []
     roles: dict[str, str] = {}
     try:

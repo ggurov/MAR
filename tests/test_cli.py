@@ -353,6 +353,29 @@ class TestExport:
         assert "modelRoles" not in out
         assert "role-set" not in capsys.readouterr().err
 
+    def test_export_carries_local_env_overrides_but_not_credentials(
+        self, reg_path, tmp_path, capsys
+    ):
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        (agent_dir / ".env").write_text(
+            "LM_STUDIO_BASE_URL=http://192.168.1.242:1234/v1\n"
+            "OPENROUTER_API_KEY=stale-local-key-123456789\n"
+            "# comment\n"
+            "export ZAI_API_KEY=stale-zai-123456789012\n",
+            encoding="utf-8",
+        )
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "LM_STUDIO_BASE_URL=http://192.168.1.242:1234/v1" in out
+        assert "stale-local-key" not in out  # provider vars never pass through
+        assert "stale-zai" not in out
+        assert "ZAI_API_KEY=zai-key-1234567890" in out  # registry is authoritative
+        assert "carried local env override(s): LM_STUDIO_BASE_URL" in captured.err
+
     def test_export_output_writes_file(self, reg_path, tmp_path):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         out_path = tmp_path / "pastable.ps1"
