@@ -111,9 +111,7 @@ class TestLimits:
                 return False
 
             def read(self):
-                return json.dumps(
-                    {"data": {"total_credits": 25.0, "total_usage": 5.25}}
-                ).encode()
+                return json.dumps({"data": {"total_credits": 25.0, "total_usage": 5.25}}).encode()
 
         seen = {}
 
@@ -146,13 +144,9 @@ class TestLimits:
                 return False
 
             def read(self):
-                return json.dumps(
-                    {"models": [{"name": "models/gemini-3-flash"}]}
-                ).encode()
+                return json.dumps({"models": [{"name": "models/gemini-3-flash"}]}).encode()
 
-        monkeypatch.setattr(
-            "mar.limits._open", lambda request, timeout=10.0: FakeResponse()
-        )
+        monkeypatch.setattr("mar.limits._open", lambda request, timeout=10.0: FakeResponse())
         assert run(reg_path, "limits", "gemini") == 0
         out = capsys.readouterr().out
         assert "gemini (api):" in out
@@ -183,8 +177,10 @@ class TestOmpSync:
         code = run(
             reg_path,
             "omp-sync",
-            "--agent-dir", str(agent_dir),
-            "--set-role", "default=zai/glm-5.3-flash",
+            "--agent-dir",
+            str(agent_dir),
+            "--set-role",
+            "default=zai/glm-5.3-flash",
         )
         assert code == 0
         import yaml
@@ -210,7 +206,7 @@ class TestPrompt:
     def test_prompt_empty_registry_is_error(self, reg_path):
         assert run(reg_path, "prompt") == 1
 
-    def test_prompt_custom_file_appended(self,reg_path, tmp_path, capsys):
+    def test_prompt_custom_file_appended(self, reg_path, tmp_path, capsys):
         custom = tmp_path / "custom.md"
         custom.write_text("install vim bindings", encoding="utf-8")
         run(reg_path, "add", "zai", "--key", FAKE_KEY)
@@ -376,9 +372,7 @@ class TestExport:
         assert "ZAI_API_KEY=zai-key-1234567890" in out  # registry is authoritative
         assert "carried local env override(s): LM_STUDIO_BASE_URL" in captured.err
 
-    def test_export_bash_carries_edit_statusline_and_path(
-        self, reg_path, tmp_path, capsys
-    ):
+    def test_export_bash_carries_edit_statusline_and_path(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "iso-agent"
         agent_dir.mkdir()
         (agent_dir / "config.yml").write_text(
@@ -394,18 +388,16 @@ class TestExport:
         captured = capsys.readouterr()
         out = captured.out
         assert "omp config set edit.mode hashline" in out
-        assert "omp config set edit.modelVariants '{\"deepseek\":\"hashline\"}'" in out
+        assert 'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'' in out
         assert "omp config set statusLine.preset custom" in out
         assert 'omp config set statusLine.leftSegments \'["vim","hostname","model"]\'' in out
-        assert 'omp config set statusLine.rightSegments \'["token_total"]\'' in out
+        assert "omp config set statusLine.rightSegments '[\"token_total\"]'" in out
         assert 'case ":$PATH:"' in out  # live PATH for the paste session
         assert "grep -qs" in out and ".bashrc" in out  # persistent PATH fix
         assert "hashline" in captured.err
         assert "statusLine" in captured.err
 
-    def test_export_powershell_settings_skip_bashrc_fix(
-        self, reg_path, tmp_path, capsys
-    ):
+    def test_export_powershell_settings_skip_bashrc_fix(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "iso-agent"
         agent_dir.mkdir()
         (agent_dir / "config.yml").write_text(
@@ -420,9 +412,7 @@ class TestExport:
         assert 'omp config set statusLine.leftSegments \'["vim","hostname"]\'' in out
         assert ".bashrc" not in out
 
-    def test_export_without_local_statusline_skips_statusline(
-        self, reg_path, capsys
-    ):
+    def test_export_without_local_statusline_skips_statusline(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         capsys.readouterr()
         assert run(reg_path, "export", "--shell", "bash") == 0
@@ -524,7 +514,15 @@ class TestPull:
         assert [s["provider"] for s in data["subscriptions"]].count("claude") == 1
 
     def test_pull_preserves_models_on_existing_sub(self, reg_path, agent_db):
-        run(reg_path, "add", "claude", "--key", "claude-key-12345678901", "--default", "claude-haiku")
+        run(
+            reg_path,
+            "add",
+            "claude",
+            "--key",
+            "claude-key-12345678901",
+            "--default",
+            "claude-haiku",
+        )
         assert run(reg_path, "pull", "--agent-dir", str(agent_db)) == 0
         data = json.loads(reg_path.read_text(encoding="utf-8"))
         sub = next(s for s in data["subscriptions"] if s["provider"] == "claude")
@@ -563,9 +561,7 @@ class TestExportOauth:
         assert "ZAI_API_KEY=zai-key-1234567890" in out
         assert "they EXPIRE" in captured.err
 
-    def test_export_warns_on_expired_or_dying_oauth_token(
-        self, reg_path, capsys
-    ):
+    def test_export_warns_on_expired_or_dying_oauth_token(self, reg_path, capsys):
         import time
 
         now_ms = int(time.time() * 1000)
@@ -584,7 +580,12 @@ class TestExportOauth:
             {"provider": "claude", **base, "expires_at_ms": now_ms - 60_000}
         )
         data["subscriptions"].append(
-            {"provider": "codex", **base, "key": "codex-token-12345678", "expires_at_ms": now_ms + 30 * 60_000}
+            {
+                "provider": "codex",
+                **base,
+                "key": "codex-token-12345678",
+                "expires_at_ms": now_ms + 30 * 60_000,
+            }
         )
         reg_path.write_text(json.dumps(data), encoding="utf-8")
         capsys.readouterr()
@@ -631,3 +632,128 @@ class TestTopLevel:
         with pytest.raises(SystemExit) as exc:
             cli.main(["frobnicate"])
         assert exc.value.code == 2
+
+
+class TestRotate:
+    def test_rotate_replaces_key_preserving_fields(self, reg_path, capsys):
+        assert (
+            run(
+                reg_path,
+                "add",
+                "zai",
+                "--key",
+                FAKE_KEY,
+                "--model",
+                "glm-4.7",
+                "--default",
+                "glm-4.7",
+                "--notes",
+                "primary",
+            )
+            == 0
+        )
+        capsys.readouterr()
+        assert run(reg_path, "rotate", "zai", "--key", "new-key-abcdef987654") == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        sub = data["subscriptions"][0]
+        assert sub["key"] == "new-key-abcdef987654"
+        assert sub["models"] == ["glm-4.7"]
+        assert sub["default_model"] == "glm-4.7"
+        assert sub["notes"] == "primary"
+        out = capsys.readouterr().out
+        assert "new-key-abcdef987654" not in out
+        assert "rotated zai" in out
+
+    def test_rotate_reads_key_from_stdin(self, reg_path, monkeypatch):
+        assert add_zai(reg_path) == 0
+        monkeypatch.setattr("sys.stdin", io.StringIO("stdin-key-123456789\n"))
+        assert run(reg_path, "rotate", "zai", "--key-stdin") == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        assert data["subscriptions"][0]["key"] == "stdin-key-123456789"
+
+    def test_rotate_requires_key(self, reg_path):
+        assert add_zai(reg_path) == 0
+        assert run(reg_path, "rotate", "zai") == 1
+
+    def test_rotate_unknown_provider_is_usage_error(self, reg_path):
+        with pytest.raises(SystemExit) as exc:
+            run(reg_path, "rotate", "not-a-provider", "--key", FAKE_KEY)
+        assert exc.value.code == 2
+
+    def test_rotate_missing_subscription_fails(self, reg_path):
+        assert run(reg_path, "rotate", "zai", "--key", FAKE_KEY) == 1
+
+    def test_rotate_rejects_oauth_subscription(self, reg_path):
+        assert run(reg_path, "add", "claude", "--method", "oauth") == 0
+        assert run(reg_path, "rotate", "claude", "--key", FAKE_KEY) == 1
+
+
+class TestConfig:
+    def test_config_show_defaults_to_file(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MAR_HOME", str(tmp_path))
+        monkeypatch.delenv("MAR_BACKEND", raising=False)
+        assert cli.main(["config", "show"]) == 0
+        assert "backend: file" in capsys.readouterr().out
+
+    def test_config_backend_file_clears_config(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MAR_HOME", str(tmp_path))
+        (tmp_path / "config.json").write_text(
+            '{"backend": "vault", "vault": {"addr": "http://x:8200"}}', encoding="utf-8"
+        )
+        assert cli.main(["config", "backend", "file"]) == 0
+        assert json.loads((tmp_path / "config.json").read_text()) == {}
+        assert "backend: file" in capsys.readouterr().out
+
+    def test_config_backend_vault_writes_config_and_redacts(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MAR_HOME", str(tmp_path))
+        token_file = tmp_path / "tok"
+        token_file.write_text("vault-token-abcdef123456\n", encoding="utf-8")
+        assert (
+            cli.main(
+                [
+                    "config",
+                    "backend",
+                    "vault",
+                    "--addr",
+                    "http://127.0.0.1:8200",
+                    "--token-file",
+                    str(token_file),
+                ]
+            )
+            == 0
+        )
+        cfg = json.loads((tmp_path / "config.json").read_text())
+        assert cfg["backend"] == "vault"
+        assert cfg["vault"]["addr"] == "http://127.0.0.1:8200"
+        assert cfg["vault"]["token_file"] == str(token_file)
+        out = capsys.readouterr().out
+        assert "vault-token-abcdef123456" not in out  # token VALUE never printed
+
+    def test_config_show_never_prints_token_value(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MAR_HOME", str(tmp_path))
+        token_file = tmp_path / "tok"
+        token_file.write_text("vault-token-abcdef123456\n", encoding="utf-8")
+        cli.main(
+            [
+                "config",
+                "backend",
+                "vault",
+                "--addr",
+                "http://x:8200",
+                "--token-file",
+                str(token_file),
+            ]
+        )
+        capsys.readouterr()
+        assert cli.main(["config", "show"]) == 0
+        out = capsys.readouterr().out
+        assert "vault-token-abcdef123456" not in out
+        assert "token_file" in out
+
+    def test_config_backend_vault_requires_addr(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MAR_HOME", str(tmp_path))
+        monkeypatch.delenv("VAULT_ADDR", raising=False)
+        monkeypatch.delenv("VAULT_TOKEN", raising=False)
+        monkeypatch.delenv("VAULT_TOKEN_FILE", raising=False)
+        assert cli.main(["config", "backend", "vault"]) == 1
+        assert "addr" in capsys.readouterr().err

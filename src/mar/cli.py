@@ -161,6 +161,57 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--registry", default=None, metavar="PATH")
     _backend_flag(p_serve)
     p_serve.set_defaults(func=_cmd_serve)
+    p_rot = sub.add_parser(
+        "rotate",
+        help="replace a provider's key in place, keeping models and settings",
+    )
+    p_rot.add_argument("provider", choices=PROVIDER_IDS)
+    p_rot.add_argument("--key", default=None, help="new API key (prefer --key-stdin)")
+    p_rot.add_argument(
+        "--key-stdin", action="store_true", help="read the new key from one stdin line"
+    )
+    p_rot.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_rot)
+    p_rot.set_defaults(func=_cmd_rotate)
+
+    p_cfg = sub.add_parser("config", help="show or change storage settings")
+    cfg_sub = p_cfg.add_subparsers(dest="config_command", required=True, metavar="action")
+
+    p_show = cfg_sub.add_parser("show", help="print the effective storage config (never secrets)")
+    p_show.add_argument("--json", action="store_true", dest="as_json")
+    p_show.set_defaults(func=_cmd_config_show)
+
+    p_be = cfg_sub.add_parser("backend", help="select the storage backend")
+    p_be.add_argument("backend", choices=("file", "vault"), help="backend to select")
+    p_be.add_argument(
+        "--addr", default=None, metavar="URL", help="vault address (or export VAULT_ADDR)"
+    )
+    p_be.add_argument(
+        "--mount", default=None, metavar="NAME", help="KV-v2 mount point (default secret)"
+    )
+    p_be.add_argument(
+        "--path", default=None, metavar="PATH", help="secret path prefix (default mar/keys)"
+    )
+    p_be.add_argument(
+        "--token-file",
+        default=None,
+        metavar="PATH",
+        help="file holding the vault token, read at use time",
+    )
+    p_be.add_argument(
+        "--token-env",
+        default=None,
+        metavar="VAR",
+        help="env var holding the token (default VAULT_TOKEN)",
+    )
+    p_be.add_argument(
+        "--import",
+        action="store_true",
+        dest="do_import",
+        help="copy the current file registry into the new backend before switching",
+    )
+    p_be.set_defaults(func=_cmd_config_backend)
+
     return parser
 
 
@@ -595,6 +646,63 @@ def _cmd_pull(args: argparse.Namespace) -> int:
         print(f"pulled: {provider.id} ({cred.provider}) — expires {expires or 'unknown'}")
     reg.save()
     return 0 if pulled else 1
+
+
+def _cmd_rotate(args: argparse.Namespace) -> int:
+    key = sys.stdin.readline().strip() if args.key_stdin else args.key
+    if not key:
+        return _err("rotate requires --key or --key-stdin")
+    reg = _load(args)
+    reg.rotate(args.provider, key)
+    reg.save()
+    print(f"rotated {args.provider} (key: {registry.mask(key)})")
+    return 0
+
+
+def _cmd_config_show(args: argparse.Namespace) -> int:
+    cfg = store.load_config()
+    backend = os.environ.get("MAR_BACKEND", "").strip() or cfg.get("backend") or "file"
+    env_note = " (from MAR_BACKEND)" if os.environ.get("MAR_BACKEND", "").strip() else ""
+    if args.as_json:
+        print(json.dumps({"backend": backend, "config": cfg}, indent=2))
+        return 0
+    print(f"backend: {backend}{env_note}")
+    vault_cfg = cfg.get("vault") or {}
+    if isinstance(vault_cfg, dict):
+        for key in ("addr", "mount", "path", "token_file", "token_env"):
+            if vault_cfg.get(key):
+                print(f"vault.{key}: {vault_cfg[key]}")
+    return 0
+
+
+def _cmd_config_backend(args: argparse.Namespace) -> int:
+    if args.backend == "file":
+        store.save_config({})
+        print("backend: file")
+        return 0
+    overrides = {
+        "addr": args.addr,
+        "mount": args.mount,
+        "path": args.path,
+        "token_file": args.token_file,
+        "token_env": args.token_env,
+    }
+    if args.do_import:
+        source = registry.Registry.load(Path(args.registry) if args.registry else None)
+        target = vault.VaultStore(**store.resolve_vault_settings(overrides))
+        destination = registry.Registry(store=target)
+        for sub in source.all():
+            destination.add(sub)
+        destination.save()
+        print(
+            f"imported {len(source.all())} subscription(s) into vault at "
+            f"{target.mount}/{target.path}"
+        )
+    settings = store.resolve_vault_settings(overrides)
+    persisted = {key: value for key, value in overrides.items() if value}
+    store.save_config({"backend": "vault", "vault": persisted})
+    print(f"backend: vault ({settings['addr']}, {settings['mount']}/{settings['path']})")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
