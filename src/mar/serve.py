@@ -22,12 +22,15 @@ from pathlib import Path
 from mar import cli
 
 
-def render_config(registry: Path, shell: str) -> str:
+def render_config(registry: Path, shell: str, backend: str | None = None) -> str:
     """Render the ``mar export`` payload for one shell, minus the markers.
 
     Args:
-        registry: Path to the MAR registry file.
+        registry: Path to the MAR registry file (read fresh per call; the
+            file backend is forced when this path is used).
         shell: ``"bash"`` or ``"powershell"``.
+        backend: Optional storage backend name passed through to the export
+            command (``vault`` reads the registry from Vault instead).
 
     Returns:
         The payload body exactly as ``mar export`` prints between the
@@ -40,8 +43,13 @@ def render_config(registry: Path, shell: str) -> str:
             (exit code 1); callers should treat it as an empty payload.
     """
     out, err = io.StringIO(), io.StringIO()
+    argv = ["export", "--shell", shell]
+    if backend:
+        argv += ["--backend", backend]
+    else:
+        argv += ["--registry", str(registry)]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        cli.main(["export", "--shell", shell, "--registry", str(registry)])
+        cli.main(argv)
     lines = [
         line
         for line in out.getvalue().splitlines()
@@ -75,11 +83,15 @@ def lan_ips() -> list[str]:
     return ips
 
 
-def make_handler(registry: Path) -> type[BaseHTTPRequestHandler]:
-    """Build a request handler bound to one registry path.
+def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPRequestHandler]:
+    """Build a request handler bound to one registry source.
 
     Args:
-        registry: Path to the MAR registry file, read per request.
+        registry: Path to the MAR registry file, read per request (used
+            when ``backend`` is None).
+        backend: Optional storage backend name forwarded to the export
+            command per request (``vault`` reads from Vault instead of the
+            file).
 
     Returns:
         A ``BaseHTTPRequestHandler`` subclass serving the endpoints.
@@ -99,13 +111,13 @@ def make_handler(registry: Path) -> type[BaseHTTPRequestHandler]:
             if self.path == "/config.sh":
                 self._send(
                     200,
-                    render_config(registry, "bash"),
+                    render_config(registry, "bash", backend),
                     "text/x-shellscript; charset=utf-8",
                 )
             elif self.path == "/config.ps1":
                 self._send(
                     200,
-                    render_config(registry, "powershell"),
+                    render_config(registry, "powershell", backend),
                     "text/plain; charset=utf-8",
                 )
             elif self.path == "/":
@@ -138,18 +150,19 @@ def make_handler(registry: Path) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def serve(host: str, port: int, registry: Path) -> None:
+def serve(host: str, port: int, registry: Path, backend: str | None = None) -> None:
     """Run the config server until interrupted.
 
     Args:
         host: Bind address (``0.0.0.0`` for LAN reachability).
         port: TCP port to listen on.
-        registry: Path to the MAR registry file.
+        registry: Path to the MAR registry file (file backend).
+        backend: Optional storage backend name (see ``make_handler``).
 
     Raises:
         OSError: If the port cannot be bound.
     """
-    server = ThreadingHTTPServer((host, port), make_handler(registry))
+    server = ThreadingHTTPServer((host, port), make_handler(registry, backend=backend))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
