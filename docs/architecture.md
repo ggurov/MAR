@@ -12,7 +12,8 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
 | `limits.py` | Usage snapshots; real fetcher(s) + manual hints | registry, providers |
 | `omp.py` | omp credential store + model roles | stdlib + pyyaml |
 | `bootstrap.py` | startup prompt renderer; one-shot sync orchestration | registry, providers, omp |
-| `cli.py` | argparse wiring, exit codes, key masking | all of the above |
+| `store.py` | Storage backends (file), backend selection + config | stdlib |
+| `vault.py` | Optional KV-v2 registry backend (stdlib urllib client) | stdlib |
 
 ## Registry file contract (`~/.mar/registry.json`)
 
@@ -40,7 +41,23 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
 - `default_model`, when set, must be in `models` (add-time validation).
 - Writes are atomic (temp file + `os.replace`); `0o600` best-effort; on Windows
   chmod is a no-op — documented, not faked.
-- Path resolution: explicit arg > `$MAR_HOME/registry.json` > `~/.mar/registry.json`.
+
+### Storage backends (mar.store / mar.vault)
+
+Persistence sits behind a two-method `Store` protocol (`read() -> dict |
+None`, `write(payload)`). The default `FileStore` implements the historical
+registry.json contract verbatim (atomic write, 0600 best-effort, `$MAR_HOME`
+resolution); `VaultStore` implements the same surface over KV-v2 with one
+secret per provider (`secret/mar/keys/<provider>`, fields = subscription
+record + `updated_at`/`rotated_by`; `_registry` marker holds the version).
+Vault saves diff against the server — unchanged providers are not rewritten,
+so `mar rotate` is a single PUT and KV-v2 history gives per-provider
+rollback. Selection precedence: explicit `--registry` path (always file) >
+`--backend` flag > `$MAR_BACKEND` > `~/.mar/config.json` `backend` key >
+file. The config file stores no secret values: the token resolves from
+`vault.token_file` (read at use time) or `vault.token_env` (default
+`VAULT_TOKEN`). The token travels only in the `X-Vault-Token` header — never
+in a URL, body, or error message (test-enforced).
 
 ## omp integration contract
 
@@ -133,12 +150,21 @@ into the registry and must not leak).
 
 ## Security posture
 
-- Keys at rest: plaintext in `~/.mar/registry.json`, 0600 best-effort. Explicit
-  v1 tradeoff; OS keyring is a future milestone (M10+, unplanned).
+- Keys at rest: plaintext in `~/.mar/registry.json`, 0600 best-effort
+  (`~/.mar` created 0700; loose-mode files self-tighten on read; failed
+  atomic writes never strand a plaintext temp file). Explicit v1 tradeoff;
+  OS keyring is a future milestone (M10+, unplanned). Opt-in alternative:
+  the Vault backend (see Storage backends above) moves keys at rest into
+  KV-v2 with versioning, audit, and per-provider rollback.
 - CLI output masks keys (`first4…last4`, or `<redacted>` if shorter than 12
-  chars). `--json` output masks too.
-- This repo must never contain real keys: tests use fake fixtures, `.mar/` is
-  gitignored.
+  chars). `--json` output masks too. `mar export` prints plaintext by design
+  (the pastable is the product); `--redact` previews the block masked, and
+  `--output` writes 0600.
+- `mar serve` exposes live credentials over plaintext HTTP by design (LAN
+  apply); it warns on non-loopback binds — treat the port as trusted-LAN
+  only.
+- This repo must never contain real keys: tests use fake fixtures, `.mar/`
+  is gitignored.
 
 ## OAuth tokens (pull + export)
 

@@ -173,14 +173,46 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar export [--shell bash] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
 | `mar serve [--port N] [--host ADDR]` | Serve the export payloads over LAN HTTP; boxes apply with `curl -fsSL http://<this-box>:8930/config.sh \| sh` |
 | `mar prompt` | Startup prompt for a fresh omp session |
-| `mar remove <provider>` | Forget a subscription |
+| `mar rotate <provider> --key-stdin` | Replace one provider's key in place — models, default model, and notes are preserved |
+| `mar config [show\|backend]` | Show or switch the storage backend (file by default; optional Vault) |
 
 ## Where keys live (and don't)
 
 Keys live **only** in your user config space: `~/.mar/registry.json` (chmod 600
-best-effort) and omp's own `~/.omp/agent/` store. The repo contains code and
-fake-key examples only — enforced by a hygiene test that fails the suite if
-any real-looking credential pattern appears in any tracked file.
+best-effort; `~/.mar` is created 0700, and a loose-mode file self-tightens on
+read) and omp's own `~/.omp/agent/` store — or, if you opt in, your
+HashiCorp Vault. The repo contains code and fake-key examples only — enforced
+by a hygiene test that fails the suite if any real-looking credential pattern
+appears in any tracked file.
+
+## Optional: store the registry in Vault (off by default)
+
+If you run [HashiCorp Vault](https://www.hashicorp.com/products/vault)
+(KV-v2), MAR can keep the registry there instead of the JSON file — useful
+when several machines share one truth or when rotation should leave an audit
+and rollback trail:
+
+```bash
+mar config backend vault --addr http://127.0.0.1:8200 \
+     --token-file ~/.vault/mar-token --import   # --import copies the file registry over
+mar list                                        # now reads from Vault
+mar rotate zai --key-stdin                      # one-secret PUT; old version stays for rollback
+mar config backend file                         # switch back anytime
+```
+
+Layout: one KV-v2 secret per provider under `secret/mar/keys/<provider>`
+(fields: the key plus the subscription's models/default/status and
+`updated_at`/`rotated_by` metadata), plus a `_registry` schema marker.
+Rotating one key rewrites exactly that secret — KV-v2 version history gives
+per-provider rollback. Consumers can read a single credential with
+``vault kv get -field=key secret/mar/keys/zai``.
+
+Nothing about Vault is required: no config and no `MAR_BACKEND` means the
+JSON file, byte-for-byte as always. The token is read from a token file or
+`VAULT_TOKEN` at use time — never stored in the config, never printed.
+`--registry PATH` always forces the file backend (tests, migration,
+inspection). Env-driven setup without a config file:
+`MAR_BACKEND=vault VAULT_ADDR=... VAULT_TOKEN=...`.
 
 ## Providers (11)
 

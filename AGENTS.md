@@ -67,8 +67,8 @@ bisect.
 src/mar/
   registry.py    # Subscription store: CRUD + persistence (~/.mar/registry.json)
   providers.py   # Static catalog of the user's 10 providers + validation
-  limits.py      # Usage snapshots: real API fetchers + manual-check fallback
-  omp.py         # omp adapter: agent.db credentials + config.yml model roles
+  store.py       # storage backends: file store + backend selection config
+  vault.py       # optional KV-v2 registry backend (stdlib urllib, opt-in)
   bootstrap.py   # startup-prompt renderer + one-shot omp sync orchestration
   cli.py         # argparse front end; wiring only, no business logic
 tests/           # mirrors src/mar/, one file per module
