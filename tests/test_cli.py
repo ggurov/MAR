@@ -490,6 +490,7 @@ class TestPull:
         subs = {s["provider"]: s for s in data["subscriptions"]}
         assert subs["claude"]["auth_method"] == "oauth"
         assert subs["claude"]["key"] == "anthropic-access-token-123"
+        assert subs["claude"]["expires_at_ms"] == 1791660887205
         assert "expires 2026-10-10T19:34Z" in subs["claude"]["notes"]
         assert "user@example.com" in subs["claude"]["notes"]
         out = capsys.readouterr().out
@@ -548,6 +549,36 @@ class TestExportOauth:
         assert "ANTHROPIC_OAUTH_TOKEN=anthropic-access-token-123" in out
         assert "ZAI_API_KEY=zai-key-1234567890" in out
         assert "they EXPIRE" in captured.err
+
+    def test_export_warns_on_expired_or_dying_oauth_token(
+        self, reg_path, capsys
+    ):
+        import time
+
+        now_ms = int(time.time() * 1000)
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        base = {
+            "auth_method": "oauth",
+            "key": "anthropic-access-token-123",
+            "models": [],
+            "default_model": None,
+            "added_at": "2026-10-10T00:00:00+00:00",
+            "status": "active",
+            "notes": "oauth via mar pull",
+        }
+        data["subscriptions"].append(
+            {"provider": "claude", **base, "expires_at_ms": now_ms - 60_000}
+        )
+        data["subscriptions"].append(
+            {"provider": "codex", **base, "key": "codex-token-12345678", "expires_at_ms": now_ms + 30 * 60_000}
+        )
+        reg_path.write_text(json.dumps(data), encoding="utf-8")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        captured = capsys.readouterr()
+        assert "claude: token ALREADY EXPIRED" in captured.err
+        assert "codex: token expires in" in captured.err
 
     def test_export_oauth_without_route_notes_login(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
