@@ -431,6 +431,19 @@ class TestExport:
         assert "statusLine" not in captured.out
         assert "statusLine not exported" in captured.err
 
+    def test_export_ships_strict_edit_mode_env(self, reg_path, tmp_path, capsys):
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        captured = capsys.readouterr()
+        assert "PI_STRICT_EDIT_MODE=1" in captured.out  # inside the .env block
+        assert "strict" in captured.err
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        out = capsys.readouterr().out
+        assert "PI_STRICT_EDIT_MODE=1" in out
+
     def test_export_output_writes_file(self, reg_path, tmp_path):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         out_path = tmp_path / "pastable.ps1"
