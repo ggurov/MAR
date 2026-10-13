@@ -170,8 +170,8 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar limits [provider]` | Real API checks (OpenRouter credits, Gemini key-liveness); exact pointers elsewhere |
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt OAuth logins (Claude, Codex) from local omp into the registry |
-| `mar export [--shell bash] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
-| `mar serve [--port N] [--host ADDR]` | Serve the export payloads over LAN HTTP; boxes apply with `curl -fsSL http://<this-box>:8930/config.sh \| sh` |
+| `mar export [--shell bash\|fish\|powershell] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
+| `mar serve [--port N] [--host ADDR]` | Serve the export payloads over LAN HTTP; boxes apply with `curl -fsSL http://<this-box>:8930/config.sh \| sh` (or `/config.fish \| fish`, `/config.ps1` PowerShell) |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar rotate <provider> --key-stdin` | Replace one provider's key in place — models, default model, and notes are preserved |
 | `mar config [show\|backend]` | Show or switch the storage backend (file by default; optional Vault) |
@@ -214,13 +214,16 @@ JSON file, byte-for-byte as always. The token is read from a token file or
 inspection). Env-driven setup without a config file:
 `MAR_BACKEND=vault VAULT_ADDR=... VAULT_TOKEN=...`.
 
-## Providers (11)
+## Providers (96)
 
 cursor-grok, codex, claude, cline, opencode, zai, openrouter, antigravity,
-copilot, jev (Typesafe judge — role-only), gemini. Every omp id/env var is
-confirmed against omp's official provider roster. Catalog:
-`src/mar/providers.py` · data + verification status:
-[docs/providers.md](docs/providers.md).
+copilot, jev (Typesafe judge — role-only), gemini, commandcode — plus the six
+mesh-lane providers (deepseek, groq, cerebras, mistral, orcarouter,
+cloudflare) and every provider in omp's roster (94 auth policies,
+2026-10-13). Every omp id/env var is confirmed against omp's official
+provider roster; orcarouter, cloudflare (Workers AI), and llama-cpp ship
+verified=False. Catalog: `src/mar/providers.py` · data + verification
+status: [docs/providers.md](docs/providers.md).
 
 ## Quickstart (dev)
 
@@ -252,7 +255,8 @@ the original problem statement: [problem_statement.txt](problem_statement.txt).
 
 ## Status
 
-Done: registry, catalog (11 providers, roster-verified), omp adapter,
+Done: registry, catalog (96 providers: 12 originals + 6 mesh lanes + omp's
+full 94-id roster swept 2026-10-13; 3 unverified), omp adapter,
 limits (OpenRouter credits + Gemini key-check), bootstrap prompt,
 omp-sync, OAuth pull, export pastable with role-setting, global install.
 Planned: per-provider OAuth add-flows (M7), deeper limit fetchers (M8),

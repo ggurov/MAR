@@ -251,6 +251,16 @@ class TestExport:
         assert "<<'MAR_EOF'" in out
         assert "OPENROUTER_API_KEY=or-key-123456789012" in out
 
+    def test_export_fish_set_gx(self, reg_path, capsys):
+        run(reg_path, "add", "openrouter", "--key", "or-key-123456789012")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "fish") == 0
+        out = capsys.readouterr().out
+        assert "set -gx OPENROUTER_API_KEY or-key-123456789012" in out
+        assert "set -gx PI_STRICT_EDIT_MODE 1" in out
+        assert "fish_add_path ~/.local/bin" in out
+        assert "omp config set edit.mode hashline" in out
+
     def test_export_skips_oauth_and_unknown_and_envless(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         # hand-edit registry to hold an oauth sub and an unknown provider

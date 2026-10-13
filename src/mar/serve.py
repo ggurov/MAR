@@ -1,9 +1,9 @@
 """LAN HTTP server that serves MAR's omp config payloads.
 
 Endpoints (all GET, all text):
-    /           — human-readable instructions
     /config.sh  — bash export payload (BEGIN/END markers stripped)
     /config.ps1 — powershell export payload (BEGIN/END stripped)
+    /config.fish — fish payload (set -gx env lines + .env persistence)
 
 Payloads are generated fresh per request from the registry, so what a
 machine fetches always matches the current ``mar export`` output — updated
@@ -28,7 +28,7 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
     Args:
         registry: Path to the MAR registry file (read fresh per call; the
             file backend is forced when this path is used).
-        shell: ``"bash"`` or ``"powershell"``.
+        shell: ``"bash"``, ``"powershell"``, or ``"fish"``.
         backend: Optional storage backend name passed through to the export
             command (``vault`` reads the registry from Vault instead).
 
@@ -38,9 +38,10 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         warnings) are discarded — they are written for the human running
         MAR, not the machine piping this into a shell.
 
-    Raises:
-        SystemExit: Propagated from ``mar export`` on an empty registry
-            (exit code 1); callers should treat it as an empty payload.
+    Notes:
+        An empty registry renders as an empty payload — ``mar export``
+        exits 1 with no output for an empty registry and stdout is what
+        becomes the payload.
     """
     out, err = io.StringIO(), io.StringIO()
     argv = ["export", "--shell", shell]
@@ -114,6 +115,12 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
                     render_config(registry, "bash", backend),
                     "text/x-shellscript; charset=utf-8",
                 )
+            elif self.path == "/config.fish":
+                self._send(
+                    200,
+                    render_config(registry, "fish"),
+                    "text/x-fish; charset=utf-8",
+                )
             elif self.path == "/config.ps1":
                 self._send(
                     200,
@@ -133,6 +140,9 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
                             "",
                             "Windows box (PowerShell):",
                             "  irm http://<this-host>/config.ps1 | iex",
+                            "",
+                            "Fish box:",
+                            f"  curl -fsSL http://{host}/config.fish | fish",
                             "",
                             "This server's addresses:",
                             ips,
