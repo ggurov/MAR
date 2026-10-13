@@ -39,6 +39,20 @@ class TestRenderConfig:
         assert "ZAI_API_KEY" not in body_before
         assert "ZAI_API_KEY" in body_after
 
+    def test_fish_payload_uses_set_gx(self, registry_path):
+        body = serve.render_config(registry_path, "fish")
+        assert "set -gx ZAI_API_KEY zai-key-1234567890" in body
+        assert "set -gx PI_STRICT_EDIT_MODE 1" in body
+        assert "fish_add_path ~/.local/bin" in body
+        assert "omp config set edit.mode hashline" in body
+        assert "BEGIN" not in body
+
+    def test_empty_registry_renders_empty_payload(self, tmp_path):
+        assert serve.render_config(tmp_path / "registry.json", "bash") == ""
+
+    def test_empty_registry_fish_renders_empty_payload(self, tmp_path):
+        assert serve.render_config(tmp_path / "registry.json", "fish") == ""
+
 
 class TestLanIps:
     def test_returns_at_least_one_ip(self):
@@ -72,6 +86,23 @@ class TestHttpServer:
         status, body = self._get(f"{server}/config.ps1")
         assert status == 200
         assert "Set-Content" in body
+
+    def test_config_fish_served(self, server):
+        status, body = self._get(f"{server}/config.fish")
+        assert status == 200
+        assert "set -gx ZAI_API_KEY zai-key-1234567890" in body
+
+    def test_empty_registry_config_sh_is_200_empty(self, tmp_path):
+        httpd = ThreadingHTTPServer(
+            ("127.0.0.1", 0), serve.make_handler(tmp_path / "registry.json")
+        )
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            status, body = self._get(f"http://127.0.0.1:{httpd.server_address[1]}/config.sh")
+        finally:
+            httpd.shutdown()
+        assert status == 200
+        assert body == ""
 
     def test_index_shows_apply_command(self, server):
         status, body = self._get(f"{server}/")

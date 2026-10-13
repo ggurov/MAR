@@ -126,7 +126,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_exp.add_argument(
         "--shell",
-        choices=("powershell", "bash"),
+        choices=("powershell", "bash", "fish"),
         default="powershell",
         help="target shell for the pastable (default: powershell)",
     )
@@ -237,6 +237,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             "trusted network or 127.0.0.1 only.",
             file=sys.stderr,
         )
+    print("Fish targets: curl -fsSL http://<this-host>/config.fish | fish")
     print("Ctrl+C to stop.")
     serve.serve(args.host, args.port, reg_path, backend=backend)
     return 0
@@ -542,7 +543,37 @@ def _cmd_export(args: argparse.Namespace) -> int:
         ]
         notes.append("PATH: ~/.local/bin ensured for this session and .bashrc")
 
-    if args.shell == "powershell":
+    if args.shell == "fish":
+        env_lines = [*lines, "PI_STRICT_EDIT_MODE=1"]
+        body = "\n".join(
+            [
+                "mkdir -p ~/.omp/agent",
+                "printf '%s\\n' "
+                + " ".join(f"'{line}'" for line in env_lines)
+                + " > ~/.omp/agent/.env",
+                *(
+                    f"set -gx {name} {value}"
+                    for name, _, value in (l.partition("=") for l in env_lines)
+                ),
+                "fish_add_path ~/.local/bin",
+            ]
+        )
+        notes.append("PATH: ~/.local/bin ensured via fish_add_path")
+        if role_lines:
+            roles_text = "\\n".join(["modelRoles:", *role_lines])
+            body = "\n".join(
+                [
+                    body,
+                    'set cfg "$HOME/.omp/agent/config.yml"',
+                    'if not test -f "$cfg"',
+                    f"    printf '{roles_text}\\n' > \"$cfg\"",
+                    "else if not grep -q '^modelRoles:' \"$cfg\"",
+                    f"    printf '\\n{roles_text}\\n' >> \"$cfg\"",
+                    "end",
+                ]
+            )
+        body = "\n".join([body, *settings_lines])
+    elif args.shell == "powershell":
         body = "\n".join(
             [
                 'New-Item -ItemType Directory -Force "$env:USERPROFILE\\.omp\\agent" | Out-Null',
