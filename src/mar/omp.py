@@ -367,6 +367,56 @@ def read_model_roles(agent_dir: Path) -> dict[str, str]:
     return dict(roles)
 
 
+def read_status_line(agent_dir: Path) -> dict[str, str | list[str]]:
+    """Read the ``statusLine`` mapping from ``<agent_dir>/config.yml``.
+
+    Args:
+        agent_dir: omp agent directory whose ``config.yml`` is read.
+
+    Returns:
+        Mapping with ``preset`` (str) and/or ``leftSegments`` /
+        ``rightSegments`` (list of strings) for whichever keys are set;
+        empty dict when the file is missing or has no ``statusLine`` key.
+
+    Raises:
+        OmpError: If the file cannot be read/parsed, ``statusLine`` is not
+            a mapping, ``preset`` is not a string, or a segments value is
+            not a list of strings.
+    """
+    config_path = agent_dir / "config.yml"
+    if not config_path.exists():
+        return {}
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise OmpError(f"failed to read {config_path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise OmpError(f"malformed YAML in {config_path}: {exc}") from exc
+    if not isinstance(config, dict) or "statusLine" not in config:
+        return {}
+    status = config["statusLine"]
+    if status is None:
+        return {}
+    if not isinstance(status, dict):
+        raise OmpError(f"{config_path} has a non-mapping statusLine value")
+    result: dict[str, str | list[str]] = {}
+    preset = status.get("preset")
+    if preset is not None:
+        if not isinstance(preset, str):
+            raise OmpError(f"{config_path} statusLine.preset is not a string")
+        result["preset"] = preset
+    for key in ("leftSegments", "rightSegments"):
+        segments = status.get(key)
+        if segments is None:
+            continue
+        if not isinstance(segments, list) or not all(
+            isinstance(s, str) for s in segments
+        ):
+            raise OmpError(f"{config_path} statusLine.{key} is not a string list")
+        result[key] = list(segments)
+    return result
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     """Create the auth_credentials table with the live omp DDL if it is absent.
 

@@ -19,6 +19,7 @@ from mar.omp import (
     list_credentials,
     read_model_roles,
     read_oauth_credentials,
+    read_status_line,
     set_model_role,
     upsert_credential,
     upsert_env_key,
@@ -347,6 +348,48 @@ def test_read_model_roles_rejects_non_mapping(tmp_path: Path) -> None:
     (tmp_path / "config.yml").write_text("modelRoles: [a, b]\n", encoding="utf-8")
     with pytest.raises(OmpError):
         read_model_roles(tmp_path)
+
+
+# --- read_status_line --------------------------------------------------------
+
+
+def test_read_status_line_missing_file(tmp_path: Path) -> None:
+    assert read_status_line(tmp_path) == {}
+
+
+def test_read_status_line_round_trips(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text(
+        "statusLine:\n"
+        "  preset: custom\n"
+        "  leftSegments: [vim, hostname, model]\n"
+        "  rightSegments: [token_total, cost]\n",
+        encoding="utf-8",
+    )
+    assert read_status_line(tmp_path) == {
+        "preset": "custom",
+        "leftSegments": ["vim", "hostname", "model"],
+        "rightSegments": ["token_total", "cost"],
+    }
+
+
+def test_read_status_line_partial(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text(
+        "statusLine:\n  preset: default\n", encoding="utf-8"
+    )
+    assert read_status_line(tmp_path) == {"preset": "default"}
+
+
+def test_read_status_line_without_key(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text("shellPath: bash\n", encoding="utf-8")
+    assert read_status_line(tmp_path) == {}
+
+
+def test_read_status_line_rejects_bad_segment_types(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text(
+        "statusLine:\n  leftSegments: [vim, 3]\n", encoding="utf-8"
+    )
+    with pytest.raises(OmpError):
+        read_status_line(tmp_path)
 
 
 # --- read_oauth_credentials --------------------------------------------------
