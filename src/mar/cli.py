@@ -106,7 +106,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p_pull.add_argument("--registry", default=None, metavar="PATH")
     p_pull.set_defaults(func=_cmd_pull)
 
+    p_serve = sub.add_parser(
+        "serve",
+        help="serve config payloads over LAN HTTP (curl http://<host>/config.sh | sh)",
+    )
+    p_serve.add_argument("--port", type=int, default=8930, metavar="N")
+    p_serve.add_argument("--host", default="0.0.0.0", metavar="ADDR")
+    p_serve.add_argument("--registry", default=None, metavar="PATH")
+    p_serve.set_defaults(func=_cmd_serve)
+
     return parser
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Run the LAN config server until interrupted. Returns 0 on clean stop."""
+    from mar import serve
+
+    reg_path = Path(args.registry) if args.registry else registry.default_path()
+    print(f"MAR config server on http://{args.host}:{args.port}")
+    for ip in serve.lan_ips():
+        print(f"  apply on a box: curl -fsSL http://{ip}:{args.port}/config.sh | sh")
+    print("PowerShell targets: irm http://<this-host>/config.ps1 | iex")
+    print("Ctrl+C to stop.")
+    serve.serve(args.host, args.port, reg_path)
+    return 0
 
 
 def _load(path: str | None) -> registry.Registry:

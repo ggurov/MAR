@@ -115,6 +115,22 @@ def _validate(sub: Subscription) -> None:
         )
 
 
+DEFAULT_REGISTRY_FILENAME = "registry.json"
+
+
+def default_path() -> Path:
+    """Return the registry file used when no explicit path is given.
+
+    Returns:
+        ``$MAR_HOME/registry.json`` when ``MAR_HOME`` is set, else
+        ``~/.mar/registry.json``.
+    """
+    mar_home = os.environ.get("MAR_HOME")
+    if mar_home:
+        return Path(mar_home) / DEFAULT_REGISTRY_FILENAME
+    return Path.home() / ".mar" / DEFAULT_REGISTRY_FILENAME
+
+
 class Registry:
     """In-memory subscription store persisted to a single JSON file."""
 
@@ -132,10 +148,7 @@ class Registry:
         """Return the registry file for this call, honoring path precedence."""
         if self._explicit is not None:
             return self._explicit
-        mar_home = os.environ.get("MAR_HOME")
-        if mar_home:
-            return Path(mar_home) / "registry.json"
-        return Path.home() / ".mar" / "registry.json"
+        return default_path()
 
     @classmethod
     def load(cls, path: Path | None = None) -> Registry:

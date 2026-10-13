@@ -53,6 +53,7 @@ graph LR
 | M9 | `mar doctor` | Catalog verification report: which omp provider ids are confirmed, which URLs resolve; also reconcile orphaned `.env` vars when a provider's credential route changes | planned |
 | M10 | `mar export` | Zero-install pastable (PowerShell/bash) writing omp's agent `.env` from the registry via omp's documented env routes; BEGIN/END framed, commands-only (notes on stderr); `--output` writes 0600; role-sets `config.yml` from the source machine's `modelRoles` idempotently; carries non-credential local `.env` lines; sets hashline edit policy strict (`PI_STRICT_EDIT_MODE=1`, deepseek pinned); clones source `statusLine`; bash variant fixes `~/.local/bin` PATH (live + `.bashrc`) | done |
 | M11 | `mar pull` + OAuth export | Adopt omp OAuth logins (anthropic, openai-codex — live data shape `access/refresh/expires` verified 2026-10-10) into the registry preserving models/defaults; export emits `ANTHROPIC_OAUTH_TOKEN` / `OPENAI_CODEX_OAUTH_TOKEN`; expiry warned in output. Access tokens are NOT refreshable via env — re-pull + re-export when they die (anthropic ≈ 8h, codex ≈ 10d) | done |
+| M12 | `mar serve` | LAN HTTP server (stdlib `http.server`, no new deps) serving `/config.sh` + `/config.ps1` — the export payloads, marker-stripped, generated fresh per request from the registry; `/` prints apply instructions; no omp install bundling (boxes already have omp) | done |
 
 ## Slice ownership (for parallel agent work)
 

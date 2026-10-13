@@ -171,6 +171,7 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt OAuth logins (Claude, Codex) from local omp into the registry |
 | `mar export [--shell bash] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
+| `mar serve [--port N] [--host ADDR]` | Serve the export payloads over LAN HTTP; boxes apply with `curl -fsSL http://<this-box>:8930/config.sh \| sh` |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar remove <provider>` | Forget a subscription |
 
