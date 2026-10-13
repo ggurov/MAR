@@ -142,8 +142,12 @@ if ((Test-Path $cfg) -and -not (Select-String -Path $cfg -Pattern '(?m)^modelRol
 ```
 
 Paste that into PowerShell on any machine with omp: credentials + judge/default
-roles, done. `--shell bash` emits the bash variant. OAuth tokens in the block
-expire (Anthropic ≈ 8h, Codex ≈ 10d) — re-run `mar pull && mar export` to
+roles, done. `--shell bash` emits the bash variant — it also adds `~/.local/bin`
+to `PATH` (live + `.bashrc`), since omp's `curl | sh` installs there and minimal
+Linux setups leave it off `PATH`. Both variants end with `omp config set` lines:
+hashline edit mode with deepseek pinned to it, and your machine's `statusLine`
+(preset + segments) so hostname stays in the prompt display. OAuth tokens in the
+block expire (Anthropic ≈ 8h, Codex ≈ 10d) — re-run `mar pull && mar export` to
 refresh. Skip notes (providers without env routes, e.g. antigravity →
 `/login google-antigravity`) print to stderr, never into the block.
 

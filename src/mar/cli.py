@@ -284,24 +284,6 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if not pairs:
         return _err("nothing to export: no active subscriptions with exportable api keys")
     lines = [f"{var}={key}" for var, key in pairs]
-    if args.shell == "powershell":
-        body = "\n".join(
-            [
-                'New-Item -ItemType Directory -Force "$env:USERPROFILE\\.omp\\agent" | Out-Null',
-                "@'",
-                *lines,
-                "'@ | Set-Content \"$env:USERPROFILE\\.omp\\agent\\.env\" -Encoding ascii",
-            ]
-        )
-    else:
-        body = "\n".join(
-            [
-                "mkdir -p ~/.omp/agent",
-                "cat > ~/.omp/agent/.env <<'MAR_EOF'",
-                *lines,
-                "MAR_EOF",
-            ]
-        )
     notes = [f"exported {len(pairs)} credential(s) ({args.shell}); then run: omp usage / omp --yolo"]
     if oauth_used:
         notes.append(
@@ -352,6 +334,53 @@ def _cmd_export(args: argparse.Namespace) -> int:
             + ", ".join(roles)
             + " (config.yml; skipped there if modelRoles already exists)"
         )
+
+    # Edit policy: hashline everywhere; deepseek explicitly pinned (other
+    # agent stacks silently downgrade deepseek to a weaker edit format).
+    settings_lines = [
+        "omp config set edit.mode hashline",
+        'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
+    ]
+    notes.append("edit policy: hashline (deepseek pinned via modelVariants)")
+
+    # statusLine cloned from this machine so fresh boxes keep the hostname
+    # segment in the prompt display.
+    try:
+        status_line = omp.read_status_line(
+            Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
+        )
+    except omp.OmpError as exc:
+        status_line = {}
+        notes.append(f"statusLine not exported: {exc}")
+    if status_line:
+        if "preset" in status_line:
+            settings_lines.append(
+                f"omp config set statusLine.preset {status_line['preset']}"
+            )
+        for key in ("leftSegments", "rightSegments"):
+            if key in status_line:
+                value = json.dumps(status_line[key], separators=(",", ":"))
+                settings_lines.append(f"omp config set statusLine.{key} '{value}'")
+        notes.append("statusLine cloned (hostname stays in the prompt)")
+    else:
+        notes.append("statusLine not exported: not set on this machine")
+
+    # omp's curl|sh installer drops the binary in ~/.local/bin, which is not
+    # on PATH on many minimal Linux setups. bash only — bashrc is a bash file.
+    path_lines: list[str] = []
+    if args.shell == "bash":
+        path_lines = [
+            (
+                'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; '
+                '*) export PATH="$HOME/.local/bin:$PATH" ;; esac'
+            ),
+            (
+                "grep -qs '\\.local/bin' \"$HOME/.bashrc\" || "
+                "printf '\\nexport PATH=\"$HOME/.local/bin:$PATH\"\\n' >> \"$HOME/.bashrc\""
+            ),
+        ]
+        notes.append("PATH: ~/.local/bin ensured for this session and .bashrc")
+
     if args.shell == "powershell":
         body = "\n".join(
             [
@@ -374,6 +403,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                     "if ((Test-Path $cfg) -and -not (Select-String -Path $cfg -Pattern '(?m)^modelRoles:' -Quiet)) { if (-not (Get-Content $cfg -Raw).EndsWith(\"`n\")) { Add-Content $cfg '' }; Add-Content $cfg $roles }",
                 ]
             )
+        body = "\n".join([body, *settings_lines])
     else:
         body = "\n".join(
             [
@@ -396,6 +426,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                     "fi",
                 ]
             )
+        body = "\n".join([body, *path_lines, *settings_lines])
     text = f"{_EXPORT_BEGIN}\n{body}\n{_EXPORT_END}\n"
     for note in notes:
         print(f"mar: {note}", file=sys.stderr)

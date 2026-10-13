@@ -376,6 +376,61 @@ class TestExport:
         assert "ZAI_API_KEY=zai-key-1234567890" in out  # registry is authoritative
         assert "carried local env override(s): LM_STUDIO_BASE_URL" in captured.err
 
+    def test_export_bash_carries_edit_statusline_and_path(
+        self, reg_path, tmp_path, capsys
+    ):
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        (agent_dir / "config.yml").write_text(
+            "modelRoles:\n  judge: typesafe/jev-latest\n"
+            "statusLine:\n  preset: custom\n"
+            "  leftSegments: [vim, hostname, model]\n"
+            "  rightSegments: [token_total]\n",
+            encoding="utf-8",
+        )
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "omp config set edit.mode hashline" in out
+        assert "omp config set edit.modelVariants '{\"deepseek\":\"hashline\"}'" in out
+        assert "omp config set statusLine.preset custom" in out
+        assert 'omp config set statusLine.leftSegments \'["vim","hostname","model"]\'' in out
+        assert 'omp config set statusLine.rightSegments \'["token_total"]\'' in out
+        assert 'case ":$PATH:"' in out  # live PATH for the paste session
+        assert "grep -qs" in out and ".bashrc" in out  # persistent PATH fix
+        assert "hashline" in captured.err
+        assert "statusLine" in captured.err
+
+    def test_export_powershell_settings_skip_bashrc_fix(
+        self, reg_path, tmp_path, capsys
+    ):
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        (agent_dir / "config.yml").write_text(
+            "statusLine:\n  preset: custom\n  leftSegments: [vim, hostname]\n",
+            encoding="utf-8",
+        )
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        assert "omp config set edit.mode hashline" in out
+        assert 'omp config set statusLine.leftSegments \'["vim","hostname"]\'' in out
+        assert ".bashrc" not in out
+
+    def test_export_without_local_statusline_skips_statusline(
+        self, reg_path, capsys
+    ):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        captured = capsys.readouterr()
+        assert "omp config set edit.mode hashline" in captured.out  # policy always carried
+        assert "statusLine" not in captured.out
+        assert "statusLine not exported" in captured.err
+
     def test_export_output_writes_file(self, reg_path, tmp_path):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         out_path = tmp_path / "pastable.ps1"
