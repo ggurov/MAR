@@ -8,7 +8,7 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
 | Module | Owns | Depends on |
 | --- | --- | --- |
 | `registry.py` | Subscription CRUD + `~/.mar/registry.json` persistence | stdlib |
-| `providers.py` | Static catalog of the user's 10 providers + validation | stdlib |
+| `providers.py` | Static provider catalog (96 entries: omp roster + mesh lanes) + validation | stdlib |
 | `limits.py` | Usage snapshots; real fetcher(s) + manual hints | registry, providers |
 | `omp.py` | omp credential store + model roles | stdlib + pyyaml |
 | `bootstrap.py` | startup prompt renderer; one-shot sync orchestration | registry, providers, omp |
@@ -110,16 +110,18 @@ above env in omp's credential precedence).
 
 ## Provider catalog
 
-Ten entries, exactly the lines of the problem statement (see
-docs/providers.md for the data + verification status). Fields:
+96 entries: the 12 original subscription lines, the 6 mesh-lane providers,
+and every id in omp's provider roster (94 auth policies, swept 2026-10-13;
+see docs/providers.md for the data + verification status). Fields:
 
 `id, display, auth_methods, key_url, limits_url, signup_url, omp_provider_id,
 default_model, limits_kind, notes`
 
 - `limits_kind` ∈ {`api`, `manual`} — drives limits.py dispatch.
 - `omp_provider_id` is what MAR writes into `agent.db.provider`. Only ids
-  observed live are trustworthy; the rest carry `verified: no` in
-  docs/providers.md and must be confirmed before M9 promotes them.
+  confirmed live or in omp's roster are trustworthy (`verified=True`); the
+  rest (orcarouter, cloudflare, llama-cpp) must be confirmed before M9
+  promotes them.
 - `validate()` returns a list of problem strings; tests assert it is empty for
   the shipped catalog.
 
