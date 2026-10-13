@@ -146,10 +146,14 @@ roles, done. `--shell bash` emits the bash variant — it also adds `~/.local/bi
 to `PATH` (live + `.bashrc`), since omp's `curl | sh` installs there and minimal
 Linux setups leave it off `PATH`. Both variants end with `omp config set` lines:
 hashline edit mode with deepseek pinned to it, and your machine's `statusLine`
-(preset + segments) so hostname stays in the prompt display. OAuth tokens in the
+(preset + segments) so hostname stays in the prompt display. The block also sets
+`PI_STRICT_EDIT_MODE=1` in the agent `.env` — omp's silent per-family fallback
+to `replace` (GLM Flash, DeepSeek, Kimi, …) is disabled, so a model that can't
+cope fails visibly instead of quietly downgrading. OAuth tokens in the
 block expire (Anthropic ≈ 8h, Codex ≈ 10d) — re-run `mar pull && mar export` to
-refresh. Skip notes (providers without env routes, e.g. antigravity →
-`/login google-antigravity`) print to stderr, never into the block.
+refresh; export warns when a token is already dead or dying. Skip notes
+(providers without env routes, e.g. antigravity → `/login google-antigravity`)
+print to stderr, never into the block.
 
 ### Start a session right
 

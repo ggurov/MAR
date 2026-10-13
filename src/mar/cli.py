@@ -308,13 +308,14 @@ def _cmd_export(args: argparse.Namespace) -> int:
     # Pass through non-credential env lines from the local agent .env (e.g.
     # LM_STUDIO_BASE_URL for a LAN LM Studio). Provider credential vars are
     # excluded — the registry is authoritative for those and stale local
-    # copies must not leak or shadow rotated keys.
+    # copies must not leak or shadow rotated keys. Policy env vars ship
+    # statically below and are also skipped to avoid duplicates.
     provider_env_vars = {
         var
         for p in providers.CATALOG
         for var in (p.omp_env_var, p.export_env_var, p.export_oauth_env_var)
         if var
-    }
+    } | {"PI_STRICT_EDIT_MODE"}
     source_agent_dir = Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
     extra_lines: list[str] = []
     local_env = source_agent_dir / ".env"
@@ -355,7 +356,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         "omp config set edit.mode hashline",
         'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
     ]
-    notes.append("edit policy: hashline (deepseek pinned via modelVariants)")
+    notes.append("edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)")
 
     # statusLine cloned from this machine so fresh boxes keep the hostname
     # segment in the prompt display.
@@ -401,6 +402,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 'New-Item -ItemType Directory -Force "$env:USERPROFILE\\.omp\\agent" | Out-Null',
                 "@'",
                 *lines,
+                "PI_STRICT_EDIT_MODE=1",
                 "'@ | Set-Content \"$env:USERPROFILE\\.omp\\agent\\.env\" -Encoding ascii",
             ]
         )
@@ -424,6 +426,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 "mkdir -p ~/.omp/agent",
                 "cat > ~/.omp/agent/.env <<'MAR_EOF'",
                 *lines,
+                "PI_STRICT_EDIT_MODE=1",
                 "MAR_EOF",
             ]
         )
