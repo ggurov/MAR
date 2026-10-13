@@ -14,12 +14,23 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from mar import __version__, bootstrap, limits, omp, providers, registry
+from mar import __version__, bootstrap, limits, omp, providers, registry, store, vault
 
 PROVIDER_IDS = providers.ids()
 
 _EXPORT_BEGIN = "# ================================================================ BEGIN =========================="
 _EXPORT_END = "# ================================================================ END ============================"
+
+
+def _backend_flag(parser: argparse.ArgumentParser) -> None:
+    """Add the --backend selector to a registry-touching subcommand."""
+    parser.add_argument(
+        "--backend",
+        choices=("file", "vault"),
+        default=None,
+        help="storage backend for this command (default: $MAR_BACKEND, then "
+        "~/.mar/config.json, then file)",
+    )
 
 
 def _now() -> str:
@@ -42,44 +53,71 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_add = sub.add_parser("add", help="register a subscription")
     p_add.add_argument("provider", choices=PROVIDER_IDS)
-    p_add.add_argument("--key", default=None, help="API key (prefer --key-stdin to keep it out of shell history)")
-    p_add.add_argument("--key-stdin", action="store_true", help="read the API key from one stdin line")
+    p_add.add_argument(
+        "--key", default=None, help="API key (prefer --key-stdin to keep it out of shell history)"
+    )
+    p_add.add_argument(
+        "--key-stdin", action="store_true", help="read the API key from one stdin line"
+    )
     p_add.add_argument("--method", choices=("api_key", "oauth"), default="api_key")
-    p_add.add_argument("--model", action="append", default=[], metavar="MODEL", help="available model (repeatable)")
-    p_add.add_argument("--default", default=None, metavar="MODEL", help="default model (auto-added to --model list)")
+    p_add.add_argument(
+        "--model", action="append", default=[], metavar="MODEL", help="available model (repeatable)"
+    )
+    p_add.add_argument(
+        "--default",
+        default=None,
+        metavar="MODEL",
+        help="default model (auto-added to --model list)",
+    )
     p_add.add_argument("--status", choices=("active", "expired", "disabled"), default="active")
     p_add.add_argument("--notes", default="")
     p_add.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_add)
     p_add.set_defaults(func=_cmd_add)
 
     p_rm = sub.add_parser("remove", help="forget a subscription")
     p_rm.add_argument("provider")
     p_rm.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_rm)
     p_rm.set_defaults(func=_cmd_remove)
 
     p_ls = sub.add_parser("list", help="show subscriptions with masked keys")
     p_ls.add_argument("--json", action="store_true", dest="as_json")
     p_ls.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_ls)
     p_ls.set_defaults(func=_cmd_list)
 
     p_lim = sub.add_parser("limits", help="usage snapshot (API) or where to check manually")
     p_lim.add_argument("provider", nargs="?", choices=PROVIDER_IDS, default=None)
     p_lim.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_lim)
     p_lim.set_defaults(func=_cmd_limits)
 
     p_sync = sub.add_parser("omp-sync", help="write stored keys into an omp install")
     p_sync.add_argument("--agent-dir", default=None, metavar="PATH")
     p_sync.add_argument(
-        "--set-role", action="append", default=[], metavar="ROLE=MODEL",
+        "--set-role",
+        action="append",
+        default=[],
+        metavar="ROLE=MODEL",
         help="set config.yml modelRoles entry, e.g. --set-role default=zai/glm-5.3-flash (repeatable)",
     )
     p_sync.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_sync)
     p_sync.set_defaults(func=_cmd_omp_sync)
 
     p_prompt = sub.add_parser("prompt", help="print the startup prompt for a fresh omp install")
-    p_prompt.add_argument("--custom", default=None, metavar="PATH", help="file whose content is appended as custom setup")
-    p_prompt.add_argument("--output", default=None, metavar="PATH", help="write prompt to file instead of stdout")
+    p_prompt.add_argument(
+        "--custom",
+        default=None,
+        metavar="PATH",
+        help="file whose content is appended as custom setup",
+    )
+    p_prompt.add_argument(
+        "--output", default=None, metavar="PATH", help="write prompt to file instead of stdout"
+    )
     p_prompt.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_prompt)
     p_prompt.set_defaults(func=_cmd_prompt)
 
     p_exp = sub.add_parser(
@@ -87,15 +125,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="emit a zero-install pastable that configures omp on another machine",
     )
     p_exp.add_argument(
-        "--shell", choices=("powershell", "bash"), default="powershell",
+        "--shell",
+        choices=("powershell", "bash"),
+        default="powershell",
         help="target shell for the pastable (default: powershell)",
     )
     p_exp.add_argument(
-        "--agent-dir", default=None, metavar="PATH",
+        "--agent-dir",
+        default=None,
+        metavar="PATH",
         help="omp agent dir to read modelRoles from (default: this machine's)",
     )
-    p_exp.add_argument("--output", default=None, metavar="PATH", help="write pastable to file instead of stdout")
+    p_exp.add_argument(
+        "--redact",
+        action="store_true",
+        help="mask key values in the pastable (preview only; the result is NOT appliable)",
+    )
+    p_exp.add_argument(
+        "--output", default=None, metavar="PATH", help="write pastable to file instead of stdout"
+    )
     p_exp.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_exp)
     p_exp.set_defaults(func=_cmd_export)
 
     p_pull = sub.add_parser(
@@ -104,6 +154,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_pull.add_argument("--agent-dir", default=None, metavar="PATH")
     p_pull.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_pull)
     p_pull.set_defaults(func=_cmd_pull)
 
     p_serve = sub.add_parser(
@@ -113,7 +164,58 @@ def _build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--port", type=int, default=8930, metavar="N")
     p_serve.add_argument("--host", default="0.0.0.0", metavar="ADDR")
     p_serve.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_serve)
     p_serve.set_defaults(func=_cmd_serve)
+    p_rot = sub.add_parser(
+        "rotate",
+        help="replace a provider's key in place, keeping models and settings",
+    )
+    p_rot.add_argument("provider", choices=PROVIDER_IDS)
+    p_rot.add_argument("--key", default=None, help="new API key (prefer --key-stdin)")
+    p_rot.add_argument(
+        "--key-stdin", action="store_true", help="read the new key from one stdin line"
+    )
+    p_rot.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_rot)
+    p_rot.set_defaults(func=_cmd_rotate)
+
+    p_cfg = sub.add_parser("config", help="show or change storage settings")
+    cfg_sub = p_cfg.add_subparsers(dest="config_command", required=True, metavar="action")
+
+    p_show = cfg_sub.add_parser("show", help="print the effective storage config (never secrets)")
+    p_show.add_argument("--json", action="store_true", dest="as_json")
+    p_show.set_defaults(func=_cmd_config_show)
+
+    p_be = cfg_sub.add_parser("backend", help="select the storage backend")
+    p_be.add_argument("backend", choices=("file", "vault"), help="backend to select")
+    p_be.add_argument(
+        "--addr", default=None, metavar="URL", help="vault address (or export VAULT_ADDR)"
+    )
+    p_be.add_argument(
+        "--mount", default=None, metavar="NAME", help="KV-v2 mount point (default secret)"
+    )
+    p_be.add_argument(
+        "--path", default=None, metavar="PATH", help="secret path prefix (default mar/keys)"
+    )
+    p_be.add_argument(
+        "--token-file",
+        default=None,
+        metavar="PATH",
+        help="file holding the vault token, read at use time",
+    )
+    p_be.add_argument(
+        "--token-env",
+        default=None,
+        metavar="VAR",
+        help="env var holding the token (default VAULT_TOKEN)",
+    )
+    p_be.add_argument(
+        "--import",
+        action="store_true",
+        dest="do_import",
+        help="copy the current file registry into the new backend before switching",
+    )
+    p_be.set_defaults(func=_cmd_config_backend)
 
     return parser
 
@@ -123,18 +225,29 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from mar import serve
 
     reg_path = Path(args.registry) if args.registry else registry.default_path()
+    backend = None if args.registry else getattr(args, "backend", None)
     print(f"MAR config server on http://{args.host}:{args.port}")
     for ip in serve.lan_ips():
         print(f"  apply on a box: curl -fsSL http://{ip}:{args.port}/config.sh | sh")
     print("PowerShell targets: irm http://<this-host>/config.ps1 | iex")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "WARNING: /config.* payloads carry live credentials over plaintext "
+            "HTTP; anyone who can reach this port can read them — bind to a "
+            "trusted network or 127.0.0.1 only.",
+            file=sys.stderr,
+        )
     print("Ctrl+C to stop.")
-    serve.serve(args.host, args.port, reg_path)
+    serve.serve(args.host, args.port, reg_path, backend=backend)
     return 0
 
 
-def _load(path: str | None) -> registry.Registry:
-    """Load registry from explicit path or default location."""
-    return registry.Registry.load(Path(path) if path else None)
+def _load(args: argparse.Namespace) -> registry.Registry:
+    """Load registry from explicit path or the configured backend."""
+    return registry.Registry.load(
+        Path(args.registry) if args.registry else None,
+        backend=getattr(args, "backend", None),
+    )
 
 
 def _cmd_add(args: argparse.Namespace) -> int:
@@ -144,7 +257,7 @@ def _cmd_add(args: argparse.Namespace) -> int:
     models = list(args.model)
     if args.default and args.default not in models:
         models.append(args.default)
-    reg = _load(args.registry)
+    reg = _load(args)
     reg.add(
         registry.Subscription(
             provider=args.provider,
@@ -163,7 +276,7 @@ def _cmd_add(args: argparse.Namespace) -> int:
 
 
 def _cmd_remove(args: argparse.Namespace) -> int:
-    reg = _load(args.registry)
+    reg = _load(args)
     reg.remove(args.provider)
     reg.save()
     print(f"removed {args.provider}")
@@ -171,7 +284,7 @@ def _cmd_remove(args: argparse.Namespace) -> int:
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    reg = _load(args.registry)
+    reg = _load(args)
     subs = reg.all()
     if args.as_json:
         rows = [
@@ -191,12 +304,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
         return 0
     for s in subs:
         default = s.default_model or "-"
-        print(f"{s.provider:<14} {s.status:<9} {s.auth_method:<8} default={default:<20} key={registry.mask(s.key)}")
+        print(
+            f"{s.provider:<14} {s.status:<9} {s.auth_method:<8} default={default:<20} key={registry.mask(s.key)}"
+        )
     return 0
 
 
 def _cmd_limits(args: argparse.Namespace) -> int:
-    reg = _load(args.registry)
+    reg = _load(args)
     targets = [args.provider] if args.provider else [s.provider for s in reg.active()]
     if not targets:
         return _err("no active subscriptions; run: mar add <provider> --key-stdin")
@@ -208,7 +323,10 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             sub = None
         if pid in limits.supported():
             if sub is None or not sub.key:
-                print(f"mar: {pid}: no api key stored; run: mar add {pid} --key-stdin", file=sys.stderr)
+                print(
+                    f"mar: {pid}: no api key stored; run: mar add {pid} --key-stdin",
+                    file=sys.stderr,
+                )
                 exit_code = 1
                 continue
             try:
@@ -234,7 +352,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
 
 
 def _cmd_omp_sync(args: argparse.Namespace) -> int:
-    reg = _load(args.registry)
+    reg = _load(args)
     roles: dict[str, str] = {}
     for spec in args.set_role:
         if "=" not in spec:
@@ -255,7 +373,7 @@ def _cmd_omp_sync(args: argparse.Namespace) -> int:
 
 
 def _cmd_prompt(args: argparse.Namespace) -> int:
-    reg = _load(args.registry)
+    reg = _load(args)
     text = bootstrap.render_prompt(reg, custom_path=Path(args.custom) if args.custom else None)
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")
@@ -266,7 +384,7 @@ def _cmd_prompt(args: argparse.Namespace) -> int:
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
-    reg = _load(args.registry)
+    reg = _load(args)
     pairs: list[tuple[str, str]] = []
     skipped: list[str] = []
     oauth_used = False
@@ -308,8 +426,13 @@ def _cmd_export(args: argparse.Namespace) -> int:
         pairs.append((provider.export_env_var, sub.key))
     if not pairs:
         return _err("nothing to export: no active subscriptions with exportable api keys")
-    lines = [f"{var}={key}" for var, key in pairs]
-    notes = [f"exported {len(pairs)} credential(s) ({args.shell}); then run: omp usage / omp --yolo"]
+    redact = getattr(args, "redact", False)
+    lines = [f"{var}={registry.mask(key) if redact else key}" for var, key in pairs]
+    notes = [
+        f"exported {len(pairs)} credential(s) ({args.shell}); then run: omp usage / omp --yolo"
+    ]
+    if redact:
+        notes.append("REDACTED: key values are masked — preview only, NOT appliable")
     if oauth_used:
         notes.append(
             "includes OAuth tokens: they EXPIRE; re-run `mar pull && mar export` to refresh"
@@ -379,7 +502,9 @@ def _cmd_export(args: argparse.Namespace) -> int:
         "omp config set edit.mode hashline",
         'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
     ]
-    notes.append("edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)")
+    notes.append(
+        "edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)"
+    )
 
     # statusLine cloned from this machine so fresh boxes keep the hostname
     # segment in the prompt display.
@@ -392,9 +517,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         notes.append(f"statusLine not exported: {exc}")
     if status_line:
         if "preset" in status_line:
-            settings_lines.append(
-                f"omp config set statusLine.preset {status_line['preset']}"
-            )
+            settings_lines.append(f"omp config set statusLine.preset {status_line['preset']}")
         for key in ("leftSegments", "rightSegments"):
             if key in status_line:
                 value = json.dumps(status_line[key], separators=(",", ":"))
@@ -414,7 +537,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             ),
             (
                 "grep -qs '\\.local/bin' \"$HOME/.bashrc\" || "
-                "printf '\\nexport PATH=\"$HOME/.local/bin:$PATH\"\\n' >> \"$HOME/.bashrc\""
+                'printf \'\\nexport PATH="$HOME/.local/bin:$PATH"\\n\' >> "$HOME/.bashrc"'
             ),
         ]
         notes.append("PATH: ~/.local/bin ensured for this session and .bashrc")
@@ -426,14 +549,14 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 "@'",
                 *lines,
                 "PI_STRICT_EDIT_MODE=1",
-                "'@ | Set-Content \"$env:USERPROFILE\\.omp\\agent\\.env\" -Encoding ascii",
+                '\'@ | Set-Content "$env:USERPROFILE\\.omp\\agent\\.env" -Encoding ascii',
             ]
         )
         if role_lines:
             body = "\n".join(
                 [
                     body,
-                    "$cfg = \"$env:USERPROFILE\\.omp\\agent\\config.yml\"",
+                    '$cfg = "$env:USERPROFILE\\.omp\\agent\\config.yml"',
                     "$roles = @'",
                     "modelRoles:",
                     *role_lines,
@@ -459,7 +582,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 [
                     body,
                     'cfg="$HOME/.omp/agent/config.yml"',
-                    "if [ ! -f \"$cfg\" ]; then",
+                    'if [ ! -f "$cfg" ]; then',
                     f"  printf '{roles_text}\\n' > \"$cfg\"",
                     "elif ! grep -q '^modelRoles:' \"$cfg\"; then",
                     f"  printf '\\n{roles_text}\\n' >> \"$cfg\"",
@@ -489,7 +612,7 @@ def _cmd_pull(args: argparse.Namespace) -> int:
     if not creds:
         return _err(f"no oauth credentials found in {agent_dir / 'agent.db'}")
     by_omp_id = {p.omp_provider_id: p for p in providers.CATALOG if p.omp_provider_id}
-    reg = _load(args.registry)
+    reg = _load(args)
     pulled = 0
     seen: set[str] = set()
     for cred in creds:
@@ -540,6 +663,63 @@ def _cmd_pull(args: argparse.Namespace) -> int:
     return 0 if pulled else 1
 
 
+def _cmd_rotate(args: argparse.Namespace) -> int:
+    key = sys.stdin.readline().strip() if args.key_stdin else args.key
+    if not key:
+        return _err("rotate requires --key or --key-stdin")
+    reg = _load(args)
+    reg.rotate(args.provider, key)
+    reg.save()
+    print(f"rotated {args.provider} (key: {registry.mask(key)})")
+    return 0
+
+
+def _cmd_config_show(args: argparse.Namespace) -> int:
+    cfg = store.load_config()
+    backend = os.environ.get("MAR_BACKEND", "").strip() or cfg.get("backend") or "file"
+    env_note = " (from MAR_BACKEND)" if os.environ.get("MAR_BACKEND", "").strip() else ""
+    if args.as_json:
+        print(json.dumps({"backend": backend, "config": cfg}, indent=2))
+        return 0
+    print(f"backend: {backend}{env_note}")
+    vault_cfg = cfg.get("vault") or {}
+    if isinstance(vault_cfg, dict):
+        for key in ("addr", "mount", "path", "token_file", "token_env"):
+            if vault_cfg.get(key):
+                print(f"vault.{key}: {vault_cfg[key]}")
+    return 0
+
+
+def _cmd_config_backend(args: argparse.Namespace) -> int:
+    if args.backend == "file":
+        store.save_config({})
+        print("backend: file")
+        return 0
+    overrides = {
+        "addr": args.addr,
+        "mount": args.mount,
+        "path": args.path,
+        "token_file": args.token_file,
+        "token_env": args.token_env,
+    }
+    if args.do_import:
+        source = registry.Registry.load(Path(args.registry) if args.registry else None)
+        target = vault.VaultStore(**store.resolve_vault_settings(overrides))
+        destination = registry.Registry(store=target)
+        for sub in source.all():
+            destination.add(sub)
+        destination.save()
+        print(
+            f"imported {len(source.all())} subscription(s) into vault at "
+            f"{target.mount}/{target.path}"
+        )
+    settings = store.resolve_vault_settings(overrides)
+    persisted = {key: value for key, value in overrides.items() if value}
+    store.save_config({"backend": "vault", "vault": persisted})
+    print(f"backend: vault ({settings['addr']}, {settings['mount']}/{settings['path']})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns process exit code: 0 ok, 1 error, 2 usage."""
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -550,7 +730,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (registry.RegistryError, limits.LimitError, bootstrap.BootstrapError, omp.OmpError) as exc:
+    except (
+        registry.RegistryError,
+        limits.LimitError,
+        bootstrap.BootstrapError,
+        omp.OmpError,
+        store.StoreError,
+        vault.VaultError,
+    ) as exc:
         return _err(str(exc))
     except KeyError as exc:
         return _err(str(exc).strip("'\""))

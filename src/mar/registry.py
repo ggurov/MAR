@@ -1,9 +1,12 @@
-"""Subscription registry: CRUD + versioned, atomic JSON persistence.
+"""Subscription registry: CRUD + versioned persistence via storage backends.
 
-Owns the on-disk contract for ``registry.json``:
+Owns the in-memory subscription set and its validation. Persistence is
+delegated to a :class:`mar.store.Store` — by default the historical JSON
+file (``registry.json``); optionally a Vault KV-v2 backend (see
+``mar.store`` / ``mar.vault``). The on-disk contract for the file backend is
 ``{"version": 1, "subscriptions": [...]}`` where each subscription keeps its
-fields as-is (``models`` is a list). Provider-catalog membership is NOT checked
-here — that cross-check lives in cli/bootstrap.
+fields as-is (``models`` is a list). Provider-catalog membership is NOT
+checked here — that cross-check lives in cli/bootstrap.
 
 Path resolution (computed at call time so env changes apply between calls):
 explicit ``path`` argument > ``$MAR_HOME/registry.json`` > ``~/.mar/registry.json``.
@@ -11,11 +14,11 @@ explicit ``path`` argument > ``$MAR_HOME/registry.json`` > ``~/.mar/registry.jso
 
 from __future__ import annotations
 
-import json
-import os
-import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+
+from mar import store as mar_store
+from mar.store import FileStore, Store
 
 SCHEMA_VERSION = 1
 VALID_AUTH_METHODS = frozenset({"api_key", "oauth"})
@@ -104,10 +107,7 @@ def _validate(sub: Subscription) -> None:
             f"expected one of {sorted(VALID_STATUSES)}"
         )
     if sub.auth_method == "api_key" and not sub.key:
-        raise RegistryError(
-            f"provider {sub.provider!r} uses auth_method 'api_key' "
-            "but has no key"
-        )
+        raise RegistryError(f"provider {sub.provider!r} uses auth_method 'api_key' but has no key")
     if sub.default_model is not None and sub.default_model not in sub.models:
         raise RegistryError(
             f"default_model {sub.default_model!r} for provider "
@@ -115,7 +115,7 @@ def _validate(sub: Subscription) -> None:
         )
 
 
-DEFAULT_REGISTRY_FILENAME = "registry.json"
+DEFAULT_REGISTRY_FILENAME = mar_store.DEFAULT_REGISTRY_FILENAME
 
 
 def default_path() -> Path:
@@ -125,69 +125,80 @@ def default_path() -> Path:
         ``$MAR_HOME/registry.json`` when ``MAR_HOME`` is set, else
         ``~/.mar/registry.json``.
     """
-    mar_home = os.environ.get("MAR_HOME")
-    if mar_home:
-        return Path(mar_home) / DEFAULT_REGISTRY_FILENAME
-    return Path.home() / ".mar" / DEFAULT_REGISTRY_FILENAME
+    return mar_store.default_registry_path()
 
 
 class Registry:
-    """In-memory subscription store persisted to a single JSON file."""
+    """In-memory subscription store persisted through a storage backend."""
 
-    def __init__(self, path: Path | None = None):
-        """Create an empty registry bound to a lazily resolved file path.
-
-        Args:
-            path: Explicit registry file; None means resolve on each call
-                from ``$MAR_HOME/registry.json`` or ``~/.mar/registry.json``.
-        """
-        self._explicit = Path(path) if path is not None else None
-        self._subs: list[Subscription] = []
-
-    def _resolve_path(self) -> Path:
-        """Return the registry file for this call, honoring path precedence."""
-        if self._explicit is not None:
-            return self._explicit
-        return default_path()
-
-    @classmethod
-    def load(cls, path: Path | None = None) -> Registry:
-        """Load a registry from disk.
+    def __init__(self, path: Path | None = None, store: Store | None = None):
+        """Create an empty registry bound to a persistence backend.
 
         Args:
-            path: Explicit registry file (see path resolution above).
-
-        Returns:
-            A Registry holding the file's subscriptions; a missing file
-            yields an empty registry.
+            path: Explicit registry FILE (file backend only); None resolves
+                lazily per call from ``$MAR_HOME/registry.json`` or
+                ``~/.mar/registry.json``.
+            store: Persistence backend; None builds a :class:`FileStore`
+                from ``path``. Mutually exclusive with ``path``.
 
         Raises:
-            RegistryError: If the file exists but is unreadable, contains
-                malformed JSON, lacks a ``version`` key, declares an unknown
-                version, or holds a non-object subscription entry.
+            RegistryError: When both ``path`` and ``store`` are given.
         """
-        reg = cls(path)
-        file = reg._resolve_path()
-        if not file.exists():
-            return reg
+        if path is not None and store is not None:
+            raise RegistryError("pass either path or store, not both")
+        self._store: Store = (
+            store if store is not None else FileStore(Path(path) if path is not None else None)
+        )
+        self._subs: list[Subscription] = []
+
+    @classmethod
+    def load(
+        cls,
+        path: Path | None = None,
+        *,
+        store: Store | None = None,
+        backend: str | None = None,
+    ) -> Registry:
+        """Load a registry from its store.
+
+        Args:
+            path: Explicit registry file (see path resolution above); when
+                given, the file backend is forced.
+            store: Explicit persistence backend (skips resolution).
+            backend: Backend name (``--backend``); resolves the store via
+                ``mar.store.resolve_store`` when ``store`` is not given.
+
+        Returns:
+            A Registry holding the stored subscriptions; a missing store
+            (no file, no vault registry marker) yields an empty registry.
+
+        Raises:
+            RegistryError: If the stored payload is unreadable, lacks a
+                ``version`` key, declares an unknown version, or holds a
+                non-object subscription entry. Vault-level failures raise
+                :class:`mar.vault.VaultError` unchanged.
+        """
+        if store is None:
+            store = mar_store.resolve_store(Path(path) if path is not None else None, backend)
+        reg = cls(store=store)
         try:
-            raw = json.loads(file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RegistryError(f"cannot read registry {file}: {exc}") from exc
+            raw = store.read()
+        except mar_store.StoreError as exc:
+            raise RegistryError(str(exc)) from exc
+        if raw is None:
+            return reg
         if not isinstance(raw, dict) or "version" not in raw:
-            raise RegistryError(f"registry {file} has no 'version' key")
+            raise RegistryError(f"registry at {store!r} has no 'version' key")
         version = raw["version"]
         if version != SCHEMA_VERSION:
             raise RegistryError(
-                f"registry {file} has unknown version {version!r}; "
-                f"expected {SCHEMA_VERSION}"
+                f"registry at {store!r} has unknown version {version!r}; expected {SCHEMA_VERSION}"
             )
         entries = raw.get("subscriptions", [])
         for entry in entries:
             if not isinstance(entry, dict):
                 raise RegistryError(
-                    f"registry {file} has a non-object subscription entry: "
-                    f"{entry!r}"
+                    f"registry at {store!r} has a non-object subscription entry: {entry!r}"
                 )
             reg._subs.append(
                 Subscription(
@@ -205,40 +216,55 @@ class Registry:
         return reg
 
     def save(self) -> None:
-        """Write the registry to disk atomically.
+        """Persist the registry through its store.
 
-        Serializes to a temp file in the target directory, chmods it 0o600
-        (best-effort; silently skipped on filesystems that refuse it), then
-        ``os.replace``s the target — readers never see a partial file.
+        The file backend writes atomically (temp file + ``os.replace``,
+        0600 best-effort); the vault backend writes one KV-v2 secret per
+        changed provider.
 
         Raises:
-            OSError: If the target directory is not writable or the final
-                replace fails.
+            OSError: If the file write fails (file backend).
+            mar.vault.VaultError: If a vault request fails (vault backend).
         """
-        file = self._resolve_path()
-        file.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": SCHEMA_VERSION,
-            "subscriptions": [asdict(s) for s in self._subs],
-        }
-        fd, tmp_name = tempfile.mkstemp(
-            dir=file.parent, prefix=file.name, suffix=".tmp"
+        self._store.write(
+            {
+                "version": SCHEMA_VERSION,
+                "subscriptions": [asdict(s) for s in self._subs],
+            }
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, indent=2)
-                handle.write("\n")
-            try:
-                os.chmod(tmp_name, 0o600)
-            except OSError:
-                pass  # best-effort; e.g. Windows FAT or odd ACLs
-            os.replace(tmp_name, file)
-        except OSError:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
+
+    def rotate(self, provider: str, key: str) -> None:
+        """Replace the api key of an existing subscription in place.
+
+        Every other field (models, default model, status, notes, added_at)
+        is preserved — rotation must not lose configuration. Call
+        :meth:`save` afterwards to persist.
+
+        Args:
+            provider: Provider id whose key is replaced.
+            key: The new key value.
+
+        Raises:
+            RegistryError: If ``key`` is empty, no subscription exists for
+                ``provider``, or the subscription is not an ``api_key``
+                one (oauth tokens refresh via ``mar pull``, not rotation).
+        """
+        if not isinstance(key, str) or not key.strip():
+            raise RegistryError("rotated key must be a non-empty string")
+        for index, existing in enumerate(self._subs):
+            if existing.provider != provider:
+                continue
+            if existing.auth_method != "api_key":
+                raise RegistryError(
+                    f"provider {provider!r} uses auth_method "
+                    f"{existing.auth_method!r}; rotate applies to api_key "
+                    "subscriptions (oauth: re-run mar pull)"
+                )
+            replacement = replace(existing, key=key)
+            _validate(replacement)
+            self._subs[index] = replacement
+            return
+        raise RegistryError(f"no subscription for provider {provider!r}")
 
     def add(self, sub: Subscription) -> None:
         """Validate and store a new subscription.
@@ -252,9 +278,7 @@ class Registry:
         """
         _validate(sub)
         if any(s.provider == sub.provider for s in self._subs):
-            raise RegistryError(
-                f"subscription for provider {sub.provider!r} already exists"
-            )
+            raise RegistryError(f"subscription for provider {sub.provider!r} already exists")
         self._subs.append(sub)
 
     def remove(self, provider: str) -> None:
