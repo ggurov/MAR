@@ -89,6 +89,35 @@ def default_registry_path() -> Path:
     return _mar_home() / DEFAULT_REGISTRY_FILENAME
 
 
+def _tighten_perms(file: Path) -> None:
+    """Best-effort hygiene: chmod secrets-bearing files to 0600.
+
+    No-op on non-posix or odd filesystems; never raises.
+    """
+    try:
+        mode = file.stat().st_mode & 0o777
+        if mode != 0o600:
+            os.chmod(file, 0o600)
+    except OSError:
+        pass
+
+
+def _ensure_private_dir(directory: Path) -> None:
+    """Create ``directory`` (with parents) and, when newly created, chmod 0700.
+
+    Existing directories are left alone — only directories MAR itself
+    creates (a fresh ``~/.mar``) are made private. Never raises beyond the
+    underlying ``mkdir`` OSError.
+    """
+    existed = directory.exists()
+    directory.mkdir(parents=True, exist_ok=True)
+    if not existed:
+        try:
+            os.chmod(directory, 0o700)
+        except OSError:
+            pass
+
+
 def _config_path() -> Path:
     """Return the backend-config file path (``$MAR_HOME/config.json``)."""
     return _mar_home() / CONFIG_FILENAME
@@ -120,6 +149,10 @@ class FileStore:
     def read(self) -> dict | None:
         """Load and return the raw registry payload.
 
+        Hygiene: a file whose mode is more permissive than 0600 is
+        tightened to 0600 best-effort (a registry copied around with 0644
+        self-heals on first read).
+
         Returns:
             The parsed JSON object; None when the file does not exist.
 
@@ -129,6 +162,7 @@ class FileStore:
         file = self._resolve()
         if not file.exists():
             return None
+        _tighten_perms(file)
         try:
             raw = json.loads(file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -147,7 +181,7 @@ class FileStore:
                 replace fails.
         """
         file = self._resolve()
-        file.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_private_dir(file.parent)
         fd, tmp_name = tempfile.mkstemp(dir=file.parent, prefix=file.name, suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -201,7 +235,7 @@ def save_config(config: dict, path: Path | None = None) -> None:
         OSError: If the write fails.
     """
     file = Path(path) if path is not None else _config_path()
-    file.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_private_dir(file.parent)
     fd, tmp_name = tempfile.mkstemp(dir=file.parent, prefix=file.name, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

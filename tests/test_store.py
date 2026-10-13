@@ -208,3 +208,35 @@ def test_registry_load_maps_store_error_to_registry_error(tmp_path):
     bad.write_text("{oops", encoding="utf-8")
     with pytest.raises(RegistryError, match="cannot read registry"):
         Registry.load(bad)
+
+
+def test_filestore_read_tightens_loose_perms(tmp_path):
+    if os.name != "posix":
+        pytest.skip("posix perms")
+    path = tmp_path / "registry.json"
+    path.write_text('{"version": 1, "subscriptions": []}', encoding="utf-8")
+    os.chmod(path, 0o644)
+    assert FileStore(path).read() == {"version": 1, "subscriptions": []}
+    assert (path.stat().st_mode & 0o777) == 0o600
+
+
+def test_filestore_write_creates_private_dir(tmp_path, monkeypatch):
+    if os.name != "posix":
+        pytest.skip("posix perms")
+    home = tmp_path / "marhome"
+    monkeypatch.setenv("MAR_HOME", str(home))
+    FileStore().write({"version": 1, "subscriptions": []})
+    assert (home.stat().st_mode & 0o777) == 0o700
+    # existing dirs are left alone
+    os.chmod(home, 0o755)
+    FileStore().write({"version": 1, "subscriptions": []})
+    assert (home.stat().st_mode & 0o777) == 0o755
+
+
+def test_save_config_creates_private_dir(tmp_path, monkeypatch):
+    if os.name != "posix":
+        pytest.skip("posix perms")
+    home = tmp_path / "marhome2"
+    monkeypatch.setenv("MAR_HOME", str(home))
+    store.save_config({"backend": "file"}, None)
+    assert (home.stat().st_mode & 0o777) == 0o700

@@ -230,6 +230,13 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     for ip in serve.lan_ips():
         print(f"  apply on a box: curl -fsSL http://{ip}:{args.port}/config.sh | sh")
     print("PowerShell targets: irm http://<this-host>/config.ps1 | iex")
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "WARNING: /config.* payloads carry live credentials over plaintext "
+            "HTTP; anyone who can reach this port can read them — bind to a "
+            "trusted network or 127.0.0.1 only.",
+            file=sys.stderr,
+        )
     print("Ctrl+C to stop.")
     serve.serve(args.host, args.port, reg_path, backend=backend)
     return 0
