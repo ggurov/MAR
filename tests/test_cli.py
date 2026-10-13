@@ -688,6 +688,23 @@ class TestRotate:
         assert run(reg_path, "rotate", "claude", "--key", FAKE_KEY) == 1
 
 
+class TestExportRedact:
+    def test_redact_masks_keys_in_block(self, reg_path, capsys):
+        assert add_zai(reg_path) == 0
+        capsys.readouterr()
+        assert run(reg_path, "export", "--redact") == 0
+        captured = capsys.readouterr()
+        assert FAKE_KEY not in captured.out
+        assert "ZAI_API_KEY=sk-t...abcd" in captured.out  # masked form
+        assert "NOT appliable" in captured.err
+
+    def test_default_export_still_prints_real_keys(self, reg_path, capsys):
+        assert add_zai(reg_path) == 0
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        assert f"ZAI_API_KEY={FAKE_KEY}" in capsys.readouterr().out
+
+
 class TestConfig:
     def test_config_show_defaults_to_file(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("MAR_HOME", str(tmp_path))

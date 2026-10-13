@@ -137,6 +137,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="omp agent dir to read modelRoles from (default: this machine's)",
     )
     p_exp.add_argument(
+        "--redact",
+        action="store_true",
+        help="mask key values in the pastable (preview only; the result is NOT appliable)",
+    )
+    p_exp.add_argument(
         "--output", default=None, metavar="PATH", help="write pastable to file instead of stdout"
     )
     p_exp.add_argument("--registry", default=None, metavar="PATH")
@@ -414,10 +419,13 @@ def _cmd_export(args: argparse.Namespace) -> int:
         pairs.append((provider.export_env_var, sub.key))
     if not pairs:
         return _err("nothing to export: no active subscriptions with exportable api keys")
-    lines = [f"{var}={key}" for var, key in pairs]
+    redact = getattr(args, "redact", False)
+    lines = [f"{var}={registry.mask(key) if redact else key}" for var, key in pairs]
     notes = [
         f"exported {len(pairs)} credential(s) ({args.shell}); then run: omp usage / omp --yolo"
     ]
+    if redact:
+        notes.append("REDACTED: key values are masked — preview only, NOT appliable")
     if oauth_used:
         notes.append(
             "includes OAuth tokens: they EXPIRE; re-run `mar pull && mar export` to refresh"
