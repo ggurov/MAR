@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from mar.registry import Registry, RegistryError, Subscription, mask
+from mar.registry import Registry, RegistryError, Subscription, default_path, mask
 
 FAKE_KEY = "test-key-1234567890"  # 19 chars, obviously fake
 ADDED_AT = "2026-10-10T12:00:00+00:00"
@@ -24,6 +25,19 @@ def sub(provider: str = "zai", **overrides) -> Subscription:
     }
     fields.update(overrides)
     return Subscription(**fields)
+
+
+# --- default_path() ---------------------------------------------------------
+
+
+def test_default_path_honors_mar_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("MAR_HOME", str(tmp_path))
+    assert default_path() == tmp_path / "registry.json"
+
+
+def test_default_path_falls_back_to_dot_mar(monkeypatch):
+    monkeypatch.delenv("MAR_HOME", raising=False)
+    assert default_path() == Path.home() / ".mar" / "registry.json"
 
 
 # --- mask() -----------------------------------------------------------------
