@@ -247,6 +247,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     pairs: list[tuple[str, str]] = []
     skipped: list[str] = []
     oauth_used = False
+    oauth_expiries: list[tuple[str, int]] = []
     for sub in reg.active():
         if sub.auth_method == "oauth":
             try:
@@ -265,6 +266,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 continue
             pairs.append((provider.export_oauth_env_var, sub.key))
             oauth_used = True
+            oauth_expiries.append((sub.provider, sub.expires_at_ms))
             continue
         if sub.auth_method != "api_key" or not sub.key:
             skipped.append(f"skipped {sub.provider}: no api key stored")
@@ -289,6 +291,18 @@ def _cmd_export(args: argparse.Namespace) -> int:
         notes.append(
             "includes OAuth tokens: they EXPIRE; re-run `mar pull && mar export` to refresh"
         )
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    for provider_id, exp_ms in oauth_expiries:
+        if exp_ms and exp_ms <= now_ms:
+            notes.append(
+                f"WARNING {provider_id}: token ALREADY EXPIRED — "
+                "re-run `mar pull && mar export` before pasting"
+            )
+        elif exp_ms and exp_ms < now_ms + 2 * 3_600_000:
+            notes.append(
+                f"{provider_id}: token expires in {(exp_ms - now_ms) // 60_000} min — "
+                "re-pull before it dies"
+            )
     notes.extend(skipped)
 
     # Pass through non-credential env lines from the local agent .env (e.g.
@@ -491,6 +505,7 @@ def _cmd_pull(args: argparse.Namespace) -> int:
                 added_at=_now(),
                 status=old.status if old else "active",
                 notes=notes,
+                expires_at_ms=cred.expires_ms,
             )
         )
         pulled += 1

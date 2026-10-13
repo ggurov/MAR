@@ -30,6 +30,7 @@ _SUBSCRIPTION_FIELDS = (
     "added_at",
     "status",
     "notes",
+    "expires_at_ms",
 )
 
 
@@ -50,6 +51,8 @@ class Subscription:
         added_at: ISO-8601 timestamp of when the subscription was added.
         status: ``"active"``, ``"expired"``, or ``"disabled"``.
         notes: Free-form user notes.
+        expires_at_ms: Token expiry as epoch milliseconds; 0 when unknown
+            or not time-limited (api_key subscriptions).
     """
 
     provider: str
@@ -60,6 +63,7 @@ class Subscription:
     added_at: str
     status: str = "active"
     notes: str = ""
+    expires_at_ms: int = 0
 
 
 def mask(key: str | None) -> str:
@@ -182,6 +186,7 @@ class Registry:
                     added_at=entry.get("added_at", ""),
                     status=entry.get("status", "active"),
                     notes=entry.get("notes", ""),
+                    expires_at_ms=entry.get("expires_at_ms", 0),
                 )
             )
         return reg

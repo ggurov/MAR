@@ -133,6 +133,7 @@ def test_roundtrip_save_load(tmp_path):
         default_model=None,
         status="disabled",
         notes="checked 2026-10-01",
+        expires_at_ms=1791660887205,
     )
     reg.add(first)
     reg.add(second)
@@ -140,9 +141,37 @@ def test_roundtrip_save_load(tmp_path):
     loaded = Registry.load(path)
     assert loaded.all() == [second, first]  # sorted by provider
     assert loaded.get("zai") == first
+    assert loaded.get("openrouter").expires_at_ms == 1791660887205
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["version"] == 1
     assert len(data["subscriptions"]) == 2
+
+
+def test_load_legacy_file_without_expires_at_ms(tmp_path):
+    """Subscriptions from files written before expires_at_ms load with 0."""
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "subscriptions": [
+                    {
+                        "provider": "zai",
+                        "auth_method": "api_key",
+                        "key": "zai-key-1234567890",
+                        "models": [],
+                        "default_model": None,
+                        "added_at": "2026-10-10T00:00:00+00:00",
+                        "status": "active",
+                        "notes": "",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    reg = Registry.load(path)
+    assert reg.get("zai").expires_at_ms == 0
 
 
 def test_file_schema_matches_contract(tmp_path):
@@ -162,6 +191,7 @@ def test_file_schema_matches_contract(tmp_path):
         "added_at",
         "status",
         "notes",
+        "expires_at_ms",
     }
     assert entry["models"] == ["glm-4.7", "glm-5.3-flash"]
 
