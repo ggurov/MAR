@@ -396,10 +396,10 @@ class TestExport:
         assert "grep -qs" in out and ".bashrc" in out  # persistent PATH fix
         assert "hashline" in captured.err
         assert "omp config set tools.approvalMode yolo" in out
-        assert 'omp config set task.agentAdvisor \'{"task":"on"}\'' in out
+        assert "task.agentAdvisor" not in out
         assert "approval pinned to yolo" in captured.err
         assert "run /vibe in the omp session" in captured.err
-        assert "task.agentAdvisor.task on" in captured.err
+        assert "routing follows modelRoles.task" in captured.err
         assert "statusLine" in captured.err
 
     def test_export_powershell_settings_skip_bashrc_fix(self, reg_path, tmp_path, capsys):
@@ -416,7 +416,6 @@ class TestExport:
         assert "omp config set edit.mode hashline" in out
         assert 'omp config set statusLine.leftSegments \'["vim","hostname"]\'' in out
         assert "omp config set tools.approvalMode yolo" in out
-        assert 'omp config set task.agentAdvisor \'{"task":"on"}\'' in out
         assert ".bashrc" not in out
 
     def test_export_without_local_statusline_skips_statusline(self, reg_path, capsys):

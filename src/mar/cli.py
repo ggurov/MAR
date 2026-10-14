@@ -502,7 +502,6 @@ def _cmd_export(args: argparse.Namespace) -> int:
         "omp config set edit.mode hashline",
         'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
         "omp config set tools.approvalMode yolo",
-        'omp config set task.agentAdvisor \'{"task":"on"}\'',
     ]
     notes.append(
         "edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)"
@@ -510,8 +509,8 @@ def _cmd_export(args: argparse.Namespace) -> int:
     notes.append("approval pinned to yolo (matches omp default; explicit so defaults can't surprise)")
     notes.append(
         "vibe mode: run /vibe in the omp session (per-session toggle, no config key). "
-        "The pastable pins approval=yolo and enables the advisor cross-check for "
-        "task/vibe workers (task.agentAdvisor.task on)"
+        "Approval is pinned to yolo; task/vibe worker routing follows modelRoles.task "
+        "(unset = default model)."
     )
 
     # statusLine cloned from this machine so fresh boxes keep the hostname
