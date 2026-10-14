@@ -183,7 +183,8 @@ def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
 
     Returns:
         ``(cell, earliest_reset_ms)`` where ``cell`` is like
-        ``"5h 100% · 7d 40% (resets in 4.0h)"`` (``None`` when every
+        ``"5h 100% · 7d 40% (resets in 4.0h)"`` (a window with a cap but
+        no remaining renders as ``"5h 14 cr"``; ``None`` when every
         window lacks both an amount and a reset) and
         ``earliest_reset_ms`` is the soonest window reset (``None`` when
         no window reports one).
@@ -212,11 +213,12 @@ def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
             base = f"{label} ${(remaining or 0):.2f}"
         else:
             suffix = "cr" if unit.startswith("cre") else ("req" if unit.startswith("req") else unit)
-            used = f"{remaining:g}" if remaining is not None else "\u2013"
-            if cap:
-                base = f"{label} {used}/{cap:g} {suffix}".rstrip()
+            if remaining is None:
+                base = f"{label} {cap:g} {suffix}".rstrip()
+            elif cap:
+                base = f"{label} {remaining:g}/{cap:g} {suffix}".rstrip()
             else:
-                base = f"{label} {used} {suffix}".rstrip()
+                base = f"{label} {remaining:g} {suffix}".rstrip()
         parts.append(f"{base} ({resets})" if resets else base)
     return (" \u00b7 ".join(parts) if parts else None), earliest
 
@@ -254,8 +256,8 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         OpenRouter credits fetch; ``None`` when a provider reports
         neither), ``renew`` (oauth token expiry only: ``in 7.9h`` under
         48 hours, ``in ~N days`` under a year, ``""`` for longer-lived
-        tokens, ``EXPIRED`` once past; ``—`` for api keys and rows
-        without an expiry), and ``limits_url``.
+        tokens, ``EXPIRED`` once past; empty string when nothing
+        expires), and ``limits_url``.
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -274,7 +276,7 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
             renew = _format_renew(hours)
         else:
-            renew = "\u2014"
+            renew = ""
         rows.append(
             {
                 "provider": sub.provider,
@@ -304,7 +306,7 @@ def render_index_html(host: str, registry: Path) -> str:
     ps_cmd = f"irm http://{host}/config.ps1 | iex"
     rows_html: list[str] = []
     for row in services_snapshot(registry):
-        usage = html_mod.escape(row["usage"]) if row["usage"] is not None else "\u2014"
+        usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
         name = html_mod.escape(row["provider"])
         if row["limits_url"]:
             provider = (
