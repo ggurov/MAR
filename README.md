@@ -146,12 +146,12 @@ roles, done. `--shell bash` emits the bash variant — it also adds `~/.local/bi
 to `PATH` (live + `.bashrc`), since omp's `curl | sh` installs there and minimal
 Linux setups leave it off `PATH`. Both variants end with `omp config set` lines:
 hashline edit mode with deepseek pinned to it, and your machine's `statusLine`
-(preset + segments) so hostname stays in the prompt display. The pastable also
-pins approval to yolo (`omp config set tools.approvalMode yolo` — matches omp's
-default; explicit so defaults can't surprise) and enables the advisor
-cross-check for task/vibe workers (`task.agentAdvisor` = `{"task":"on"}`). Vibe
-mode itself is a per-session toggle: run `/vibe` in the omp session (no config
-key exists). The block also sets
+(preset + segments) so hostname stays in the prompt display. The pastable
+also pins approval to yolo (`omp config set tools.approvalMode yolo` — matches
+omp's default; explicit so defaults can't surprise). Vibe mode itself is a
+per-session toggle: run `/vibe` in the omp session (no config key exists);
+task/vibe worker routing follows `modelRoles.task` (unset = the default model).
+The block also sets
 `PI_STRICT_EDIT_MODE=1` in the agent `.env` — omp's silent per-family fallback
 to `replace` (GLM Flash, DeepSeek, Kimi, …) is disabled, so a model that can't
 cope fails visibly instead of quietly downgrading. OAuth tokens in the
