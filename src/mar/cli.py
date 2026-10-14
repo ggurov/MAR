@@ -501,10 +501,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
     settings_lines = [
         "omp config set edit.mode hashline",
         'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
+        "omp config set tools.approvalMode yolo",
     ]
     notes.append(
         "edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)"
     )
+    notes.append("vibe mode enabled (--yolo autonomous tool use)")
 
     # statusLine cloned from this machine so fresh boxes keep the hostname
     # segment in the prompt display.
