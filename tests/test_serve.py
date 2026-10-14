@@ -102,7 +102,7 @@ class TestServicesSnapshot:
         assert set(rows) == {"zai", "openrouter", "claude"}
         assert rows["claude"]["renew"] == "in 3.0h"  # oauth token expiry
         assert rows["claude"]["usage"] == "5h 90% (resets in 2.0h)"
-        assert rows["zai"]["renew"] == "\u2014"  # api keys: nothing expires
+        assert rows["zai"]["renew"] == ""  # api keys: nothing expires
         assert rows["zai"]["limits_url"].startswith("https://")
         assert rows["zai"]["usage"] is None  # only openrouter fetches live
 
@@ -193,7 +193,7 @@ class TestServicesSnapshot:
         )
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         assert rows["claude"]["usage"] == "5h 100% \u00b7 7d 40% (resets in 4.0h)"
-        assert rows["claude"]["renew"] == "\u2014"  # oauth row without expiry
+        assert rows["claude"]["renew"] == ""  # oauth row without expiry
 
     def test_reset_only_windows_quantify_quota(self, registry_path, monkeypatch):
         _add_sub(
@@ -235,7 +235,7 @@ class TestServicesSnapshot:
         )
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         assert rows["opencode"]["usage"] == "5h resets in 2.0h"  # reset-only window
-        assert rows["opencode"]["renew"] == "\u2014"  # api keys never renew
+        assert rows["opencode"]["renew"] == ""  # api keys never renew
 
     def test_every_window_carries_its_own_reset_timeline(self, registry_path, monkeypatch):
         _add_sub(
@@ -289,7 +289,7 @@ class TestServicesSnapshot:
             == "rolling-5h resets in 2.0h \u00b7 weekly resets in 27.0h"
             " \u00b7 monthly resets in ~8 days"
         )
-        assert rows["opencode"]["renew"] == "\u2014"
+        assert rows["opencode"]["renew"] == ""
 
     def test_api_key_rows_never_show_window_resets(self, registry_path, monkeypatch):
         _add_sub(
@@ -325,7 +325,7 @@ class TestServicesSnapshot:
         monkeypatch.setattr(serve, "_run_omp_usage", lambda: {"reports": reports})
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         for pid in ("zai", "openrouter", "commandcode"):
-            assert rows[pid]["renew"] == "\u2014"  # api keys carry no renewal
+            assert rows[pid]["renew"] == ""  # api keys carry no renewal
             assert rows[pid]["usage"] == "5h 50% (resets in 2.0h)"
 
     def test_omp_usage_failure_keeps_page_alive(
@@ -339,7 +339,7 @@ class TestServicesSnapshot:
         monkeypatch.setattr(serve, "_run_omp_usage", boom)
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         assert rows["zai"]["usage"] is None
-        assert rows["zai"]["renew"] == "\u2014"
+        assert rows["zai"]["renew"] == ""
 
     def test_formatter_handles_missing_remaining(self, monkeypatch):
         monkeypatch.setattr(serve, "_usage_cache", {})
@@ -372,7 +372,7 @@ class TestServicesSnapshot:
                 }
             ]
         )
-        assert "5h \u2013/14 cr" in cell
+        assert "5h 14 cr" in cell
         assert "chat 200/200 req" in cell
         assert "resets" in cell
         assert earliest == 1792283530102
@@ -470,6 +470,7 @@ class TestIndexHtml:
         )  # provider name doubles as the usage link
         assert ">Usage<" not in html  # usage column dropped
         assert "resets in 2.0h" in html  # window reset rides the quota cell
+        assert "<td></td>" in html  # empty cells render blank, not a dash
         assert "in 3.0h" in html  # oauth token expiry stays in the renew cell
         assert "plan \u2197" not in html  # plan link removed from renew cell
         assert "re-login:" not in html  # re-login hint removed from renew cell
