@@ -43,9 +43,12 @@ bisect.
    in unit tests. Every path comes from `tmp_path` or an explicit argument.
    `MAR_HOME` / `PI_CODING_AGENT_DIR` env vars are overrides for production use, and
    tests must set them to `tmp_path` when exercising default-path logic.
-2. **Keys are secrets.** Never print, log, commit, or embed a raw key. Use the
-   CLI's masking output (`sk_…abcd`). Fixtures use obviously fake keys
-   (`test-key-1234`).
+2. **Keys stay out of the repo.** Never commit or embed a raw key —
+   `tests/test_repo_hygiene.py` enforces this and stays in force. Raw keys
+   appearing in chat, command output, or session transcripts is acceptable
+   during development; the owner works with raw keys knowingly. The CLI's
+   masking output (`sk_…abcd`) remains the presentation default, and fixtures
+   keep using obviously fake keys (`test-key-1234`).
 3. **No stubs.** No `NotImplementedError`, no `TODO`, no mock-returns in
    `src/`. If a real dependency is missing (e.g. an unverified provider
    endpoint), the catalog/notes say so explicitly and the CLI says what it
