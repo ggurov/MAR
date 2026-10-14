@@ -22,7 +22,6 @@ import socket
 import subprocess
 import threading
 import time
-from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -200,14 +199,12 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
 
     Returns:
         One dict per active subscription with keys ``provider``,
-        ``auth``, ``usage`` (quota text from ``omp usage`` windows or the
-        OpenRouter credits fetch; ``None`` when a provider reports
-        nothing), ``renew`` (earliest usage-window reset when known, else
-        the oauth token expiry, else ``—``), ``limits_url``, ``renew_url``
-        (the provider usage/plan page for oauth subs — renewal is re-login,
-        not the API-keys console — falling back to the key URL; else ``""``),
-        and ``omp_id`` (omp's provider id for the ``omp login`` hint; ``""``
-        when unmapped).
+        ``auth``, ``usage`` (quota text from ``omp usage`` windows — with
+        a trailing ``resets in X.Xh`` / ``resets EXPIRED`` for the
+        soonest window reset — or the OpenRouter credits fetch; ``None``
+        when a provider reports neither), ``renew`` (oauth token expiry
+        only: ``in 7.9h`` while valid, ``EXPIRED`` once past; ``—`` for
+        api keys and rows without an expiry), and ``limits_url``.
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -215,29 +212,20 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     usage_map = _omp_usage()
     for sub in reg.active():
         try:
-            prov = providers.get(sub.provider)
-            limits_url = prov.limits_url
+            limits_url = providers.get(sub.provider).limits_url
         except KeyError:
-            prov = None
             limits_url = ""
-        renew_url = (
-            (prov.limits_url or prov.key_url)
-            if sub.auth_method == "oauth" and prov
-            else ""
-        )
         omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
         quota, earliest_reset = _format_limits(omp_limits)
         if quota is None and sub.provider == "openrouter":
             quota = _usage_cell(sub.provider, sub.key)
         if earliest_reset is not None:
-            stamp = datetime.fromtimestamp(earliest_reset / 1000, UTC)
             hours = (earliest_reset / 1000 - time.time()) / 3600
-            renew = stamp.strftime("%Y-%m-%d %H:%MZ") + f" (in {hours:.1f}h)"
-        elif sub.auth_method == "oauth" and sub.expires_at_ms:
-            stamp = datetime.fromtimestamp(sub.expires_at_ms / 1000, UTC)
-            renew = stamp.strftime("%Y-%m-%dT%H:%MZ")
+            resets = f"resets in {hours:.1f}h" if hours > 0 else "resets EXPIRED"
+            quota = f"{quota} \u00b7 {resets}" if quota else resets
+        if sub.auth_method == "oauth" and sub.expires_at_ms:
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
-            renew += f" (in {hours:.1f}h)" if hours > 0 else " — EXPIRED"
+            renew = f"in {hours:.1f}h" if hours > 0 else "EXPIRED"
         else:
             renew = "\u2014"
         rows.append(
@@ -246,9 +234,7 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
                 "auth": sub.auth_method,
                 "usage": quota,
                 "renew": renew,
-                "renew_url": renew_url,
                 "limits_url": limits_url,
-                "omp_id": id_map.get(sub.provider, ""),
             }
         )
     return rows
@@ -280,13 +266,6 @@ def render_index_html(host: str, registry: Path) -> str:
         renew = html_mod.escape(row["renew"])
         if "EXPIRED" in renew:
             renew = f'<span class="expired">{renew}</span>'
-        if row["renew_url"]:
-            renew += (
-                f' · <a href="{html_mod.escape(row["renew_url"])}"'
-                ' target="_blank" rel="noopener">plan ↗</a>'
-            )
-            omp_id = html_mod.escape(row["omp_id"] or "<provider>")
-            renew += f' · re-login: <code>omp login {omp_id}</code>, then <code>mar pull</code>'
         rows_html.append(
             f"<tr><td><b>{html_mod.escape(row['provider'])}</b></td>"
             f"<td>{row['auth']}</td>"
@@ -306,7 +285,7 @@ def render_index_html(host: str, registry: Path) -> str:
   * {{ box-sizing: border-box; }}
   body {{ margin:0; min-height:100vh; display:flex; justify-content:center;
          background:#0d1117; color:#e6edf3; font:15px/1.55 system-ui,-apple-system,sans-serif; }}
-  main {{ width:100%; max-width:1100px; padding:36px 28px; }}
+  main {{ width:100%; max-width:1300px; padding:36px 32px; }}
   h1 {{ font-size:19px; margin:0 0 2px; }}
   h1 span {{ color:#58a6ff; }}
   .sub {{ color:#8b949e; margin:0 0 22px; font-size:14px; }}

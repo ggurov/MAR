@@ -73,13 +73,36 @@ class TestServicesSnapshot:
         )
         monkeypatch.setattr(serve, "_usage_cache", {})
         monkeypatch.setattr(serve, "_omp_cache", {})
-        monkeypatch.setattr(serve, "_run_omp_usage", dict)  # no windows
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "anthropic",
+                        "limits": [
+                            {
+                                "id": "anthropic:5h",
+                                "amount": {
+                                    "remaining": 90,
+                                    "limit": 100,
+                                    "unit": "percent",
+                                },
+                                "window": {
+                                    "resetsAt": int(time.time() * 1000)
+                                    + 2 * 3_600_000
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         assert set(rows) == {"zai", "openrouter", "claude"}
-        assert rows["claude"]["renew"].startswith("2026-")
-        assert "in 3.0h" in rows["claude"]["renew"]  # token expiry fallback
-        assert rows["claude"]["renew_url"] == "https://claude.ai/new#settings/usage"
-        assert rows["zai"]["renew_url"] == ""  # api keys: nothing to renew
+        assert rows["claude"]["renew"] == "in 3.0h"  # oauth token expiry
+        assert rows["claude"]["usage"] == "5h 90% \u00b7 resets in 2.0h"
+        assert rows["zai"]["renew"] == "\u2014"  # api keys: nothing expires
         assert rows["zai"]["limits_url"].startswith("https://")
         assert rows["zai"]["usage"] is None  # only openrouter fetches live
 
@@ -102,6 +125,7 @@ class TestServicesSnapshot:
         )
         monkeypatch.setattr(serve, "_usage_cache", {})
         monkeypatch.setattr(serve, "_omp_cache", {})
+        reset_ms = int(time.time() * 1000) + 4 * 3_600_000
         monkeypatch.setattr(
             serve,
             "_run_omp_usage",
@@ -126,7 +150,7 @@ class TestServicesSnapshot:
                                     "limit": 100,
                                     "unit": "percent",
                                 },
-                                "window": {"resetsAt": 1792238400422},
+                                "window": {"resetsAt": reset_ms},
                             },
                         ],
                     }
@@ -134,8 +158,87 @@ class TestServicesSnapshot:
             },
         )
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
-        assert rows["claude"]["usage"] == "5h 100% \u00b7 7d 40%"
-        assert "2026-10-17" in rows["claude"]["renew"]  # earliest resetsAt wins
+        assert rows["claude"]["usage"] == "5h 100% \u00b7 7d 40% \u00b7 resets in 4.0h"
+        assert rows["claude"]["renew"] == "\u2014"  # oauth row without expiry
+
+    def test_reset_only_windows_quantify_quota(self, registry_path, monkeypatch):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "opencode",
+                "auth_method": "api_key",
+                "key": "oc-key-1234567890",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "opencode-go",
+                        "limits": [
+                            {
+                                "id": "opencode-go:5h",
+                                "amount": {},
+                                "window": {
+                                    "resetsAt": int(time.time() * 1000)
+                                    + 2 * 3_600_000
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        assert rows["opencode"]["usage"] == "resets in 2.0h"  # reset-only window
+        assert rows["opencode"]["renew"] == "\u2014"  # api keys never renew
+
+    def test_api_key_rows_never_show_window_resets(self, registry_path, monkeypatch):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "commandcode",
+                "auth_method": "api_key",
+                "key": "cc-key-1234567890",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        reset_ms = int(time.time() * 1000) + 2 * 3_600_000
+        reports = [
+            {
+                "provider": omp_id,
+                "limits": [
+                    {
+                        "id": f"{omp_id}:5h",
+                        "amount": {"remaining": 50, "limit": 100, "unit": "percent"},
+                        "window": {"resetsAt": reset_ms},
+                    }
+                ],
+            }
+            for omp_id in ("zai", "openrouter", "commandcode")
+        ]
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", lambda: {"reports": reports})
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        for pid in ("zai", "openrouter", "commandcode"):
+            assert rows[pid]["renew"] == "\u2014"  # api keys carry no renewal
+            assert rows[pid]["usage"] == "5h 50% \u00b7 resets in 2.0h"
 
     def test_omp_usage_failure_keeps_page_alive(
         self, registry_path, monkeypatch
@@ -238,7 +341,31 @@ class TestIndexHtml:
             },
         )
         monkeypatch.setattr(serve, "_omp_cache", {})
-        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "anthropic",
+                        "limits": [
+                            {
+                                "id": "anthropic:5h",
+                                "amount": {
+                                    "remaining": 90,
+                                    "limit": 100,
+                                    "unit": "percent",
+                                },
+                                "window": {
+                                    "resetsAt": int(time.time() * 1000)
+                                    + 2 * 3_600_000
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
         html = serve.render_index_html("localhost:8930", registry_path)
         assert "<!doctype html>" in html.lower()
         assert "http://localhost:8930/config.sh | sh" in html
@@ -248,9 +375,11 @@ class TestIndexHtml:
         assert "github.com/ggurov/MAR" in html
         assert "Services" in html
         assert "zai" in html and "openrouter" in html
-        assert "usage" in html  # usage-page links
-        assert "plan ↗" in html  # oauth rows link the plan/usage page, not API keys
-        assert "omp login anthropic" in html  # provider-specific re-login hint
+        assert "usage \u2197" in html  # usage-page links
+        assert "resets in 2.0h" in html  # window reset rides the quota cell
+        assert "in 3.0h" in html  # oauth token expiry stays in the renew cell
+        assert "plan \u2197" not in html  # plan link removed from renew cell
+        assert "re-login:" not in html  # re-login hint removed from renew cell
         assert "omp /login" not in html  # old generic hint is gone
         assert "mar pull" in html  # renewal-flow note under the table
 
