@@ -97,7 +97,7 @@ gemini (api):
   key alive: 62 models visible (45 gemini)
 
 PS> mar limits zai                 # no public API → exact pointer instead
-https://z.ai
+https://z.ai/manage-apikey/coding-plan/personal/usage
 Open this page and check usage manually.
 ```
 

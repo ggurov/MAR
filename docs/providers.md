@@ -17,7 +17,7 @@ ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
 | 3 | claude | Anthropic Claude | anthropic | env `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys | https://console.anthropic.com/settings/usage | manual |
 | 4 | cline | Cline | cline-pass | agent.db login row | https://cline.bot | https://cline.bot | manual |
 | 5 | opencode | OpenCode | opencode-go | agent.db login row | https://opencode.ai | https://opencode.ai/console/ | manual |
-| 6 | zai | Z.ai | zai | agent.db login row | https://z.ai/manage-apikey/apikey-list | https://z.ai | manual |
+| 6 | zai | Z.ai | zai | agent.db login row | https://z.ai/manage-apikey/apikey-list | https://z.ai/manage-apikey/coding-plan/personal/usage | manual |
 | 7 | openrouter | OpenRouter | openrouter | agent.db login row | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | api |
 | 8 | antigravity | Google Antigravity | google-antigravity | agent.db (OAuth-first) | https://antigravity.google | https://antigravity.google | manual |
 | 9 | copilot | GitHub Copilot | github-copilot | env `COPILOT_GITHUB_TOKEN` | https://github.com/settings/tokens | https://github.com/settings/copilot | manual |
