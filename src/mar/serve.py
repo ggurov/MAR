@@ -191,6 +191,26 @@ def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
     return (" \u00b7 ".join(parts) if parts else None), earliest
 
 
+def _format_renew(hours: float) -> str:
+    """Format an oauth token's remaining lifetime for the Renews cell.
+
+    Args:
+        hours: Hours until the token expires; negative once past.
+
+    Returns:
+        ``EXPIRED`` when ``hours <= 0``; ``in 7.9h`` under 48 hours;
+        ``in ~N days`` under a year; ``""`` for longer-lived tokens,
+        whose expiry is far enough out to read as non-expiring.
+    """
+    if hours <= 0:
+        return "EXPIRED"
+    if hours < 48:
+        return f"in {hours:.1f}h"
+    if hours < 8760:
+        days = round(hours / 24)
+        return f"in ~{days} day" if days == 1 else f"in ~{days} days"
+    return ""
+
 def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     """Collect one row per active subscription for the services panel.
 
@@ -203,8 +223,9 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         a trailing ``resets in X.Xh`` / ``resets EXPIRED`` for the
         soonest window reset — or the OpenRouter credits fetch; ``None``
         when a provider reports neither), ``renew`` (oauth token expiry
-        only: ``in 7.9h`` while valid, ``EXPIRED`` once past; ``—`` for
-        api keys and rows without an expiry), and ``limits_url``.
+        only: ``in 7.9h`` under 48 hours, ``in ~N days`` under a year,
+        ``""`` for longer-lived tokens, ``EXPIRED`` once past; ``—``
+        for api keys and rows without an expiry), and ``limits_url``.
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -225,7 +246,7 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
             quota = f"{quota} \u00b7 {resets}" if quota else resets
         if sub.auth_method == "oauth" and sub.expires_at_ms:
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
-            renew = f"in {hours:.1f}h" if hours > 0 else "EXPIRED"
+            renew = _format_renew(hours)
         else:
             renew = "\u2014"
         rows.append(
@@ -250,7 +271,7 @@ def render_index_html(host: str, registry: Path) -> str:
     Returns:
         A complete HTML5 document: apply commands for sh and PowerShell
         with copy-to-clipboard buttons, the configured-services table
-        (quota, renewal, usage link), a plaintext-HTTP warning, and the
+        (quota, renewal, provider usage link), a plaintext-HTTP warning, and the
         GitHub repo link.
     """
     sh_cmd = f"curl -fsSL http://{host}/config.sh | sh"
@@ -258,20 +279,22 @@ def render_index_html(host: str, registry: Path) -> str:
     rows_html: list[str] = []
     for row in services_snapshot(registry):
         usage = html_mod.escape(row["usage"]) if row["usage"] is not None else "\u2014"
-        link = (
-            f'<a href="{row["limits_url"]}" target="_blank" rel="noopener">usage ↗</a>'
-            if row["limits_url"]
-            else "\u2014"
-        )
+        name = html_mod.escape(row["provider"])
+        if row["limits_url"]:
+            provider = (
+                f'<a href="{html_mod.escape(row["limits_url"])}" target="_blank"'
+                f' rel="noopener"><b>{name}</b></a>'
+            )
+        else:
+            provider = f"<b>{name}</b>"
         renew = html_mod.escape(row["renew"])
         if "EXPIRED" in renew:
             renew = f'<span class="expired">{renew}</span>'
         rows_html.append(
-            f"<tr><td><b>{html_mod.escape(row['provider'])}</b></td>"
+            f"<tr><td>{provider}</td>"
             f"<td>{row['auth']}</td>"
             f"<td class=\"mono\">{usage}</td>"
-            f"<td>{renew}</td>"
-            f"<td>{link}</td></tr>"
+            f"<td>{renew}</td></tr>"
         )
     ips = "".join(f"<li><code>{ip}</code></li>" for ip in lan_ips())
     return f"""<!doctype html>
@@ -344,7 +367,7 @@ def render_index_html(host: str, registry: Path) -> str:
   <div class="card">
     <h2>Services</h2>
     <table>
-      <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th><th>Usage</th></tr>
+      <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th></tr>
       {''.join(rows_html)}
     </table>
     <p class="note"><span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
