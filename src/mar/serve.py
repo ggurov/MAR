@@ -17,7 +17,10 @@ from __future__ import annotations
 import contextlib
 import html as html_mod
 import io
+import json
 import socket
+import subprocess
+import threading
 import time
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -97,6 +100,98 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
     return cell
 
 
+_OMP_TTL_SECONDS = 300.0
+_omp_cache: dict = {}
+
+
+def _run_omp_usage() -> dict:
+    """Invoke ``omp usage --json`` and return the parsed document.
+
+    Returns:
+        The ``omp usage --json`` document (``reports`` keyed by provider).
+
+    Raises:
+        OSError: If ``omp`` cannot be executed.
+        ValueError: If the output is not JSON.
+    """
+
+    done = subprocess.run(
+        ["omp", "usage", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=150,
+        check=True,
+    )
+    return json.loads(done.stdout)
+
+
+def _omp_usage() -> dict[str, list]:
+    """Return omp's usage reports, cached for :data:`_OMP_TTL_SECONDS`.
+
+    Stale data is served when a refresh fails — a dead CLI must never
+    break the page.
+
+    Returns:
+        Mapping of omp provider id to its ``limits`` list (possibly empty).
+    """
+    now = time.monotonic()
+    if _omp_cache.get("ts") is not None and now - _omp_cache["ts"] < _OMP_TTL_SECONDS:
+        return _omp_cache.get("data", {})
+    try:
+        data = _run_omp_usage()
+        reports = {r["provider"]: r.get("limits", []) for r in data.get("reports", [])}
+    except Exception:  # noqa: BLE001 — degrade to the last good snapshot
+        reports = _omp_cache.get("data", {})
+    _omp_cache["ts"] = now
+    _omp_cache["data"] = reports
+    return reports
+
+
+def _omp_id_map() -> dict[str, str]:
+    """Map catalog provider id → omp provider id (when one exists)."""
+    return {
+        p.id: p.omp_provider_id for p in providers.CATALOG if p.omp_provider_id
+    }
+
+
+def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
+    """Format omp usage limits into one quota cell plus earliest reset.
+
+    Args:
+        items: The ``limits`` list of one ``omp usage`` report.
+
+    Returns:
+        ``(cell, earliest_reset_ms)`` where ``cell`` is like
+        ``"5h 100% · 7d 40%"`` (``None`` when nothing is quantified) and
+        ``earliest_reset_ms`` is the soonest window reset (``None`` when
+        no window reports one).
+    """
+    parts: list[str] = []
+    earliest: int | None = None
+    for item in items:
+        amount = item.get("amount") or {}
+        remaining, cap, unit = amount.get("remaining"), amount.get("limit"), (amount.get("unit") or "")
+        window = item.get("window") or {}
+        reset = window.get("resetsAt")
+        if reset is not None and (earliest is None or reset < earliest):
+            earliest = int(reset)
+        if remaining is None and cap is None:
+            continue
+        label = item.get("id", "?").rsplit(":", 1)[-1]
+        if unit == "percent":
+            parts.append(f"{label} {(remaining or 0):.0f}%")
+        elif unit == "usd":
+            parts.append(f"{label} ${(remaining or 0):.2f}")
+        else:
+            suffix = "cr" if unit.startswith("cre") else ("req" if unit.startswith("req") else unit)
+            used = f"{remaining:g}" if remaining is not None else "\u2013"
+            if cap:
+                parts.append(f"{label} {used}/{cap:g} {suffix}".rstrip())
+            else:
+                parts.append(f"{label} {used} {suffix}".rstrip())
+    return (" \u00b7 ".join(parts) if parts else None), earliest
+
+
 def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     """Collect one row per active subscription for the services panel.
 
@@ -105,18 +200,29 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
 
     Returns:
         One dict per active subscription with keys ``provider``,
-        ``auth``, ``usage`` (live quota text or ``None`` when the
-        provider has no fetcher), ``renew`` (expiry for oauth tokens,
-        ``—`` for api keys), and ``limits_url``.
+        ``auth``, ``usage`` (quota text from ``omp usage`` windows or the
+        OpenRouter credits fetch; ``None`` when a provider reports
+        nothing), ``renew`` (earliest usage-window reset when known, else
+        the oauth token expiry, else ``—``), and ``limits_url``.
     """
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
+    id_map = _omp_id_map()
+    usage_map = _omp_usage()
     for sub in reg.active():
         try:
             limits_url = providers.get(sub.provider).limits_url
         except KeyError:
             limits_url = ""
-        if sub.auth_method == "oauth" and sub.expires_at_ms:
+        omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
+        quota, earliest_reset = _format_limits(omp_limits)
+        if quota is None and sub.provider == "openrouter":
+            quota = _usage_cell(sub.provider, sub.key)
+        if earliest_reset is not None:
+            stamp = datetime.fromtimestamp(earliest_reset / 1000, UTC)
+            hours = (earliest_reset / 1000 - time.time()) / 3600
+            renew = stamp.strftime("%Y-%m-%d %H:%MZ") + f" (in {hours:.1f}h)"
+        elif sub.auth_method == "oauth" and sub.expires_at_ms:
             stamp = datetime.fromtimestamp(sub.expires_at_ms / 1000, UTC)
             renew = stamp.strftime("%Y-%m-%dT%H:%MZ")
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
@@ -127,7 +233,7 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
             {
                 "provider": sub.provider,
                 "auth": sub.auth_method,
-                "usage": _usage_cell(sub.provider, sub.key),
+                "usage": quota,
                 "renew": renew,
                 "limits_url": limits_url,
             }
@@ -180,7 +286,7 @@ def render_index_html(host: str, registry: Path) -> str:
   * {{ box-sizing: border-box; }}
   body {{ margin:0; min-height:100vh; display:flex; justify-content:center;
          background:#0d1117; color:#e6edf3; font:15px/1.55 system-ui,-apple-system,sans-serif; }}
-  main {{ width:100%; max-width:720px; padding:36px 24px; }}
+  main {{ width:100%; max-width:1100px; padding:36px 28px; }}
   h1 {{ font-size:19px; margin:0 0 2px; }}
   h1 span {{ color:#58a6ff; }}
   .sub {{ color:#8b949e; margin:0 0 22px; font-size:14px; }}
@@ -360,6 +466,9 @@ def serve(host: str, port: int, registry: Path, backend: str | None = None) -> N
     Raises:
         OSError: If the port cannot be bound.
     """
+    # Warm the omp usage cache in the background — the first page view
+    # should not wait on a full provider sweep.
+    threading.Thread(target=_omp_usage, daemon=True).start()
     server = ThreadingHTTPServer((host, port), make_handler(registry, backend))
     try:
         server.serve_forever()
