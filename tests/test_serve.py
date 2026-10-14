@@ -78,8 +78,9 @@ class TestServicesSnapshot:
         assert set(rows) == {"zai", "openrouter", "claude"}
         assert rows["claude"]["renew"].startswith("2026-")
         assert "in 3.0h" in rows["claude"]["renew"]  # token expiry fallback
+        assert rows["claude"]["renew_url"] == "https://console.anthropic.com/settings/keys"
+        assert rows["zai"]["renew_url"] == ""  # api keys: nothing to renew
         assert rows["zai"]["limits_url"].startswith("https://")
-        assert rows["zai"]["renew"] == "\u2014"  # api keys do not renew
         assert rows["zai"]["usage"] is None  # only openrouter fetches live
 
     def test_omp_usage_fills_quota_and_renew_columns(
@@ -222,6 +223,20 @@ class TestServicesSnapshot:
 class TestIndexHtml:
     def test_page_has_copy_buttons_repo_and_services(self, registry_path, monkeypatch):
         monkeypatch.setattr(serve, "_usage_cache", {})
+        _add_sub(
+            registry_path,
+            {
+                "provider": "claude",
+                "auth_method": "oauth",
+                "key": "tok-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": int(time.time() * 1000) + 3 * 3_600_000,
+            },
+        )
         monkeypatch.setattr(serve, "_omp_cache", {})
         monkeypatch.setattr(serve, "_run_omp_usage", dict)
         html = serve.render_index_html("localhost:8930", registry_path)
@@ -234,6 +249,8 @@ class TestIndexHtml:
         assert "Services" in html
         assert "zai" in html and "openrouter" in html
         assert "usage" in html  # usage-page links
+        assert "renew ↗" in html  # oauth rows carry a renewal link
+        assert "mar pull" in html  # renewal-flow note under the table
 
 
 def body_guard(html: str) -> str:

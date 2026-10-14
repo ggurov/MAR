@@ -203,7 +203,8 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         ``auth``, ``usage`` (quota text from ``omp usage`` windows or the
         OpenRouter credits fetch; ``None`` when a provider reports
         nothing), ``renew`` (earliest usage-window reset when known, else
-        the oauth token expiry, else ``—``), and ``limits_url``.
+        the oauth token expiry, else ``—``), ``limits_url``, and ``renew_url``
+        (the provider key URL for oauth subs, else ``""``).
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -211,9 +212,12 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     usage_map = _omp_usage()
     for sub in reg.active():
         try:
-            limits_url = providers.get(sub.provider).limits_url
+            prov = providers.get(sub.provider)
+            limits_url = prov.limits_url
         except KeyError:
+            prov = None
             limits_url = ""
+        renew_url = prov.key_url if sub.auth_method == "oauth" and prov else ""
         omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
         quota, earliest_reset = _format_limits(omp_limits)
         if quota is None and sub.provider == "openrouter":
@@ -235,6 +239,7 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
                 "auth": sub.auth_method,
                 "usage": quota,
                 "renew": renew,
+                "renew_url": renew_url,
                 "limits_url": limits_url,
             }
         )
@@ -267,6 +272,11 @@ def render_index_html(host: str, registry: Path) -> str:
         renew = html_mod.escape(row["renew"])
         if "EXPIRED" in renew:
             renew = f'<span class="expired">{renew}</span>'
+        if row["renew_url"]:
+            renew += (
+                f' · <a href="{html_mod.escape(row["renew_url"])}"'
+                ' target="_blank" rel="noopener">renew ↗</a>'
+            )
         rows_html.append(
             f"<tr><td><b>{html_mod.escape(row['provider'])}</b></td>"
             f"<td>{row['auth']}</td>"
@@ -350,6 +360,9 @@ def render_index_html(host: str, registry: Path) -> str:
     </table>
     <p class="note"><span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
        LAN only; the firewall rule scopes this port to LocalSubnet.</p>
+    <p class="note">oauth token expired? omp auto-refreshes it on next use — run
+       <code>mar pull</code> here, or <code>/login &lt;provider&gt;</code> on the remote box,
+       then <code>mar pull &amp;&amp; mar export</code>.</p>
   </div>
 
   <footer>
