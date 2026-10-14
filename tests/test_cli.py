@@ -396,7 +396,8 @@ class TestExport:
         assert "grep -qs" in out and ".bashrc" in out  # persistent PATH fix
         assert "hashline" in captured.err
         assert "omp config set tools.approvalMode yolo" in out
-        assert "task.agentAdvisor" not in out
+        assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert "advisor engagement is pinned OFF" in captured.err
         assert "approval pinned to yolo" in captured.err
         assert "run /vibe in the omp session" in captured.err
         assert "routing follows modelRoles.task" in captured.err
@@ -412,10 +413,13 @@ class TestExport:
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         capsys.readouterr()
         assert run(reg_path, "export") == 0
-        out = capsys.readouterr().out
+        captured = capsys.readouterr()
+        out = captured.out
         assert "omp config set edit.mode hashline" in out
         assert 'omp config set statusLine.leftSegments \'["vim","hostname"]\'' in out
         assert "omp config set tools.approvalMode yolo" in out
+        assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert "advisor engagement is pinned OFF" in captured.err
         assert ".bashrc" not in out
 
     def test_export_without_local_statusline_skips_statusline(self, reg_path, capsys):
