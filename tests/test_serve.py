@@ -250,7 +250,8 @@ class TestIndexHtml:
         assert "zai" in html and "openrouter" in html
         assert "usage" in html  # usage-page links
         assert "plan ↗" in html  # oauth rows link the plan/usage page, not API keys
-        assert "omp /login" in html  # renewal is re-login, then pull
+        assert "omp login anthropic" in html  # provider-specific re-login hint
+        assert "omp /login" not in html  # old generic hint is gone
         assert "mar pull" in html  # renewal-flow note under the table
 
 
