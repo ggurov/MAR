@@ -184,8 +184,9 @@ def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
     Returns:
         ``(cell, earliest_reset_ms)`` where ``cell`` is like
         ``"5h 100% · 7d 40% (resets in 4.0h)"`` (a window with a cap but
-        no remaining renders as ``"5h 14 cr"``; ``None`` when every
-        window lacks both an amount and a reset) and
+        no remaining renders its ``usedFraction`` as ``"5h 7% used"``,
+        or its bare cap as ``"5h 14 cr"`` without one; ``None`` when
+        every window lacks both an amount and a reset) and
         ``earliest_reset_ms`` is the soonest window reset (``None`` when
         no window reports one).
     """
@@ -207,7 +208,11 @@ def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
             if resets:
                 parts.append(f"{label} {resets}")
             continue
-        if unit == "percent":
+        used_fraction = amount.get("usedFraction")
+        if remaining is None and used_fraction is not None:
+            # commandcode windows: cap plus used fraction, no absolute remaining
+            base = f"{label} {used_fraction * 100:.0f}% used"
+        elif unit == "percent":
             base = f"{label} {(remaining or 0):.0f}%"
         elif unit == "usd":
             base = f"{label} ${(remaining or 0):.2f}"
@@ -218,7 +223,8 @@ def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
             elif cap:
                 base = f"{label} {remaining:g}/{cap:g} {suffix}".rstrip()
             else:
-                base = f"{label} {remaining:g} {suffix}".rstrip()
+                rem = f"{remaining:.2f}" if suffix == "cr" else f"{remaining:g}"
+                base = f"{label} {rem} {suffix}".rstrip()
         parts.append(f"{base} ({resets})" if resets else base)
     return (" \u00b7 ".join(parts) if parts else None), earliest
 

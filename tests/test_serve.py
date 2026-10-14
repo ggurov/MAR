@@ -377,6 +377,67 @@ class TestServicesSnapshot:
         assert "resets" in cell
         assert earliest == 1792283530102
 
+    def test_commandcode_windows_report_percent_used(self, registry_path, monkeypatch):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "commandcode",
+                "auth_method": "api_key",
+                "key": "cc-key-1234567890",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        # amount shapes captured from a live `omp usage --json` report
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "commandcode",
+                        "limits": [
+                            {
+                                "id": "commandcode:5h",
+                                "amount": {
+                                    "used": 0.9582798204,
+                                    "limit": 14,
+                                    "usedFraction": 0.0684485586,
+                                    "unit": "credits",
+                                },
+                                "window": {},
+                            },
+                            {
+                                "id": "commandcode:7d",
+                                "amount": {
+                                    "used": 6.3729490048,
+                                    "limit": 35,
+                                    "usedFraction": 0.18208425728,
+                                    "unit": "credits",
+                                },
+                                "window": {},
+                            },
+                            {
+                                "id": "commandcode:balance",
+                                "amount": {"remaining": 63.6270509952, "unit": "credits"},
+                            },
+                        ],
+                    }
+                ]
+            },
+        )
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        assert rows["commandcode"]["usage"] == (
+            "5h 7% used \u00b7 7d 18% used \u00b7 balance 63.63 cr"
+        )
+        assert rows["commandcode"]["renew"] == ""
+
     def test_openrouter_row_carries_live_credits(self, registry_path, monkeypatch):
         calls = []
 
