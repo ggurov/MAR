@@ -78,7 +78,7 @@ class TestServicesSnapshot:
         assert set(rows) == {"zai", "openrouter", "claude"}
         assert rows["claude"]["renew"].startswith("2026-")
         assert "in 3.0h" in rows["claude"]["renew"]  # token expiry fallback
-        assert rows["claude"]["renew_url"] == "https://console.anthropic.com/settings/keys"
+        assert rows["claude"]["renew_url"] == "https://console.anthropic.com/settings/usage"
         assert rows["zai"]["renew_url"] == ""  # api keys: nothing to renew
         assert rows["zai"]["limits_url"].startswith("https://")
         assert rows["zai"]["usage"] is None  # only openrouter fetches live
@@ -249,7 +249,8 @@ class TestIndexHtml:
         assert "Services" in html
         assert "zai" in html and "openrouter" in html
         assert "usage" in html  # usage-page links
-        assert "renew ↗" in html  # oauth rows carry a renewal link
+        assert "plan ↗" in html  # oauth rows link the plan/usage page, not API keys
+        assert "omp /login" in html  # renewal is re-login, then pull
         assert "mar pull" in html  # renewal-flow note under the table
 
 

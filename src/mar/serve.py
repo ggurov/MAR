@@ -204,7 +204,8 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         OpenRouter credits fetch; ``None`` when a provider reports
         nothing), ``renew`` (earliest usage-window reset when known, else
         the oauth token expiry, else ``—``), ``limits_url``, and ``renew_url``
-        (the provider key URL for oauth subs, else ``""``).
+        (the provider usage/plan page for oauth subs — renewal is re-login,
+        not the API-keys console — falling back to the key URL; else ``""``).
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -217,7 +218,11 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         except KeyError:
             prov = None
             limits_url = ""
-        renew_url = prov.key_url if sub.auth_method == "oauth" and prov else ""
+        renew_url = (
+            (prov.limits_url or prov.key_url)
+            if sub.auth_method == "oauth" and prov
+            else ""
+        )
         omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
         quota, earliest_reset = _format_limits(omp_limits)
         if quota is None and sub.provider == "openrouter":
@@ -275,8 +280,9 @@ def render_index_html(host: str, registry: Path) -> str:
         if row["renew_url"]:
             renew += (
                 f' · <a href="{html_mod.escape(row["renew_url"])}"'
-                ' target="_blank" rel="noopener">renew ↗</a>'
+                ' target="_blank" rel="noopener">plan ↗</a>'
             )
+            renew += ' · re-login: <code>omp /login</code>, then <code>mar pull</code>'
         rows_html.append(
             f"<tr><td><b>{html_mod.escape(row['provider'])}</b></td>"
             f"<td>{row['auth']}</td>"
@@ -360,9 +366,9 @@ def render_index_html(host: str, registry: Path) -> str:
     </table>
     <p class="note"><span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
        LAN only; the firewall rule scopes this port to LocalSubnet.</p>
-    <p class="note">oauth token expired? omp auto-refreshes it on next use — run
-       <code>mar pull</code> here, or <code>/login &lt;provider&gt;</code> on the remote box,
-       then <code>mar pull &amp;&amp; mar export</code>.</p>
+    <p class="note">oauth renews by re-login — <code>omp /login &lt;provider&gt;</code> on the
+       box (omp stores the fresh token), then <code>mar pull</code> adopts it here. Don't
+       switch to API keys: API billing is a separate tier from your subscription quota.</p>
   </div>
 
   <footer>
