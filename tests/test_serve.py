@@ -338,7 +338,7 @@ class TestServicesSnapshot:
         monkeypatch.setattr(serve, "_usage_cache", {})
         rows = serve.services_snapshot(registry_path)
         row = next(r for r in rows if r["provider"] == "openrouter")
-        assert row["usage"] == "$315.00 of $325.00 left"
+        assert row["usage"] == "$315.00 left"
         # second call serves from the TTL cache — no second fetch
         serve.services_snapshot(registry_path)
         assert calls == ["openrouter"]

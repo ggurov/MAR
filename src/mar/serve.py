@@ -77,7 +77,7 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
         key: The provider credential used for the live fetch.
 
     Returns:
-        Human quota text, e.g. ``"$315.00 of $325.00 left"``; ``None``
+        Human quota text, e.g. ``"$315.00 left"``; ``None``
         when the provider has no live fetcher. Fetch failures degrade to
         ``"unavailable"``.
     """
@@ -90,7 +90,7 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
         snapshot = limits.fetch(provider, key or "", timeout=5.0)
         item = snapshot.items[0]
         if item.limit is not None:
-            cell = f"${item.limit - (item.used or 0):.2f} of ${item.limit:.2f} left"
+            cell = f"${item.limit - (item.used or 0):.2f} left"
         else:
             cell = f"${item.used or 0:.2f} used"
     except Exception:  # noqa: BLE001 — a dead usage API must never 500 the page
