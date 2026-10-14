@@ -503,6 +503,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
         "omp config set tools.approvalMode yolo",
         'omp config set task.agentAdvisor \'{"task":"off"}\'',
+        "omp config set hideThinkingBlock true",
     ]
     notes.append(
         "edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)"
@@ -513,6 +514,10 @@ def _cmd_export(args: argparse.Namespace) -> int:
         "Approval is pinned to yolo; advisor engagement is pinned OFF for task/vibe "
         "workers (opt in later: flip 'off' to 'on'); task/vibe worker routing follows "
         "modelRoles.task (unset = default model)."
+    )
+    notes.append(
+        "thinking blocks hidden (display only; --hide-thinking is per-run; "
+        "flip with: omp config set hideThinkingBlock false)"
     )
 
     # statusLine cloned from this machine so fresh boxes keep the hostname
