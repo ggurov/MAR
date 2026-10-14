@@ -153,7 +153,9 @@ per-session toggle: run `/vibe` in the omp session (no config key exists);
 advisor engagement is pinned OFF for task/vibe workers (`task.agentAdvisor` =
 `{"task":"off"}` — flip to `"on"` to let workers consult the advisor role);
 task/vibe worker routing follows `modelRoles.task` (unset = the default model).
-The block also sets
+Thinking blocks are hidden by default (`hideThinkingBlock` = `true`,
+display-only — `--hide-thinking` is the per-run override; flip the config back
+to see them). The block also sets
 `PI_STRICT_EDIT_MODE=1` in the agent `.env` — omp's silent per-family fallback
 to `replace` (GLM Flash, DeepSeek, Kimi, …) is disabled, so a model that can't
 cope fails visibly instead of quietly downgrading. OAuth tokens in the

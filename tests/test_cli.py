@@ -397,6 +397,8 @@ class TestExport:
         assert "hashline" in captured.err
         assert "omp config set tools.approvalMode yolo" in out
         assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert "omp config set hideThinkingBlock true" in out
+        assert "thinking blocks hidden" in captured.err
         assert "advisor engagement is pinned OFF" in captured.err
         assert "approval pinned to yolo" in captured.err
         assert "run /vibe in the omp session" in captured.err
@@ -419,6 +421,7 @@ class TestExport:
         assert 'omp config set statusLine.leftSegments \'["vim","hostname"]\'' in out
         assert "omp config set tools.approvalMode yolo" in out
         assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert "omp config set hideThinkingBlock true" in out
         assert "advisor engagement is pinned OFF" in captured.err
         assert ".bashrc" not in out
 
