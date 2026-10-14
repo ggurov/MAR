@@ -145,7 +145,9 @@ Paste that into PowerShell on any machine with omp: credentials + judge/default
 roles, done. `--shell bash` emits the bash variant — it also adds `~/.local/bin`
 to `PATH` (live + `.bashrc`), since omp's `curl | sh` installs there and minimal
 Linux setups leave it off `PATH`. Both variants end with `omp config set` lines:
-hashline edit mode with deepseek pinned to it, and your machine's `statusLine`
+hashline edit mode with deepseek pinned to it, vibe mode
+(`omp config set tools.approvalMode yolo` — `--yolo` autonomous tool use,
+persisted), and your machine's `statusLine`
 (preset + segments) so hostname stays in the prompt display. The block also sets
 `PI_STRICT_EDIT_MODE=1` in the agent `.env` — omp's silent per-family fallback
 to `replace` (GLM Flash, DeepSeek, Kimi, …) is disabled, so a model that can't
