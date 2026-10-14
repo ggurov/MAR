@@ -171,7 +171,7 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt OAuth logins (Claude, Codex) from local omp into the registry |
 | `mar export [--shell bash] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
-| `mar serve [--port N] [--host ADDR]` | Serve the export payloads over LAN HTTP; boxes apply with `curl -fsSL http://<this-box>:8930/config.sh \| sh` |
+| `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar rotate <provider> --key-stdin` | Replace one provider's key in place — models, default model, and notes are preserved |
 | `mar config [show\|backend]` | Show or switch the storage backend (file by default; optional Vault) |

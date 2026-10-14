@@ -1,36 +1,43 @@
-"""LAN HTTP server that serves MAR's omp config payloads.
+"""LAN HTTP server that serves MAR's omp config payloads and service status.
 
-Endpoints (all GET, all text):
-    /           — human-readable instructions
+Endpoints (all GET):
+    /           — HTML page: apply commands with copy buttons, configured
+                  services with quotas/renewals/usage links, repo link
     /config.sh  — bash export payload (BEGIN/END markers stripped)
     /config.ps1 — powershell export payload (BEGIN/END stripped)
 
 Payloads are generated fresh per request from the registry, so what a
 machine fetches always matches the current ``mar export`` output — updated
 configs on demand for boxes that already have omp installed. The server
-never mutates anything and holds no state.
+never mutates anything.
 """
 
 from __future__ import annotations
 
 import contextlib
+import html as html_mod
 import io
 import socket
+import time
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from mar import cli
+from mar import cli, limits, providers
+
+REPO_URL = "https://github.com/ggurov/MAR"
+_USAGE_TTL_SECONDS = 60.0
+_usage_cache: dict[str, tuple[float, str]] = {}
 
 
 def render_config(registry: Path, shell: str, backend: str | None = None) -> str:
     """Render the ``mar export`` payload for one shell, minus the markers.
 
     Args:
-        registry: Path to the MAR registry file (read fresh per call; the
-            file backend is forced when this path is used).
+        registry: Path to the MAR registry file.
         shell: ``"bash"`` or ``"powershell"``.
-        backend: Optional storage backend name passed through to the export
-            command (``vault`` reads the registry from Vault instead).
+        backend: Optional storage backend name; when given it is passed
+            through, otherwise the file backend is forced via the path.
 
     Returns:
         The payload body exactly as ``mar export`` prints between the
@@ -39,8 +46,7 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         MAR, not the machine piping this into a shell.
 
     Raises:
-        SystemExit: Propagated from ``mar export`` on an empty registry
-            (exit code 1); callers should treat it as an empty payload.
+        SystemExit: Propagated from ``mar export`` on an empty registry.
     """
     out, err = io.StringIO(), io.StringIO()
     argv = ["export", "--shell", shell]
@@ -56,6 +62,217 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         if not (line.startswith("# ===") and ("BEGIN" in line or "END" in line))
     ]
     return "\n".join(lines).strip("\n")
+
+
+def _usage_cell(provider: str, key: str | None) -> str | None:
+    """Return the quota text for one provider, caching live fetches.
+
+    Only OpenRouter has a shipped fetcher; every other provider yields
+    ``None`` here and relies on the usage-page link instead.
+
+    Args:
+        provider: Catalog id.
+        key: The provider credential used for the live fetch.
+
+    Returns:
+        Human quota text, e.g. ``"$315.00 of $325.00 left"``; ``None``
+        when the provider has no live fetcher. Fetch failures degrade to
+        ``"unavailable"``.
+    """
+    if provider != "openrouter":
+        return None
+    cached = _usage_cache.get(provider)
+    if cached is not None and time.monotonic() - cached[0] < _USAGE_TTL_SECONDS:
+        return cached[1]
+    try:
+        snapshot = limits.fetch(provider, key or "", timeout=5.0)
+        item = snapshot.items[0]
+        if item.limit is not None:
+            cell = f"${item.limit - (item.used or 0):.2f} of ${item.limit:.2f} left"
+        else:
+            cell = f"${item.used or 0:.2f} used"
+    except Exception:  # noqa: BLE001 — a dead usage API must never 500 the page
+        cell = "unavailable"
+    _usage_cache[provider] = (time.monotonic(), cell)
+    return cell
+
+
+def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
+    """Collect one row per active subscription for the services panel.
+
+    Args:
+        registry: Path to the MAR registry file (file backend).
+
+    Returns:
+        One dict per active subscription with keys ``provider``,
+        ``auth``, ``usage`` (live quota text or ``None`` when the
+        provider has no fetcher), ``renew`` (expiry for oauth tokens,
+        ``—`` for api keys), and ``limits_url``.
+    """
+    rows: list[dict[str, str]] = []
+    reg = cli.registry.Registry.load(registry)
+    for sub in reg.active():
+        try:
+            limits_url = providers.get(sub.provider).limits_url
+        except KeyError:
+            limits_url = ""
+        if sub.auth_method == "oauth" and sub.expires_at_ms:
+            stamp = datetime.fromtimestamp(sub.expires_at_ms / 1000, UTC)
+            renew = stamp.strftime("%Y-%m-%dT%H:%MZ")
+            hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
+            renew += f" (in {hours:.1f}h)" if hours > 0 else " — EXPIRED"
+        else:
+            renew = "\u2014"
+        rows.append(
+            {
+                "provider": sub.provider,
+                "auth": sub.auth_method,
+                "usage": _usage_cell(sub.provider, sub.key),
+                "renew": renew,
+                "limits_url": limits_url,
+            }
+        )
+    return rows
+
+
+def render_index_html(host: str, registry: Path) -> str:
+    """Render the landing page for one reachable ``host:port``.
+
+    Args:
+        host: ``host:port`` as the client reached the server (Host header).
+        registry: Path to the MAR registry file for the services panel.
+
+    Returns:
+        A complete HTML5 document: apply commands for sh and PowerShell
+        with copy-to-clipboard buttons, the configured-services table
+        (quota, renewal, usage link), a plaintext-HTTP warning, and the
+        GitHub repo link.
+    """
+    sh_cmd = f"curl -fsSL http://{host}/config.sh | sh"
+    ps_cmd = f"irm http://{host}/config.ps1 | iex"
+    rows_html: list[str] = []
+    for row in services_snapshot(registry):
+        usage = html_mod.escape(row["usage"]) if row["usage"] is not None else "\u2014"
+        link = (
+            f'<a href="{row["limits_url"]}" target="_blank" rel="noopener">usage ↗</a>'
+            if row["limits_url"]
+            else "\u2014"
+        )
+        renew = html_mod.escape(row["renew"])
+        if "EXPIRED" in renew:
+            renew = f'<span class="expired">{renew}</span>'
+        rows_html.append(
+            f"<tr><td><b>{html_mod.escape(row['provider'])}</b></td>"
+            f"<td>{row['auth']}</td>"
+            f"<td class=\"mono\">{usage}</td>"
+            f"<td>{renew}</td>"
+            f"<td>{link}</td></tr>"
+        )
+    ips = "".join(f"<li><code>{ip}</code></li>" for ip in lan_ips())
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAR config server</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; min-height:100vh; display:flex; justify-content:center;
+         background:#0d1117; color:#e6edf3; font:15px/1.55 system-ui,-apple-system,sans-serif; }}
+  main {{ width:100%; max-width:720px; padding:36px 24px; }}
+  h1 {{ font-size:19px; margin:0 0 2px; }}
+  h1 span {{ color:#58a6ff; }}
+  .sub {{ color:#8b949e; margin:0 0 22px; font-size:14px; }}
+  .card {{ background:#161b22; border:1px solid #30363d; border-radius:10px;
+           padding:16px 18px; margin-bottom:14px; }}
+  .card h2 {{ font-size:12px; margin:0 0 10px; text-transform:uppercase;
+              letter-spacing:.07em; color:#8b949e; }}
+  code.cmd {{ display:block; background:#0d1117; border:1px solid #30363d; border-radius:6px;
+              padding:10px 12px; font:13px/1.4 ui-monospace,Consolas,monospace;
+              overflow-x:auto; white-space:nowrap; }}
+  .row {{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }}
+  button {{ background:#238636; color:#fff; border:0; border-radius:6px; padding:7px 14px;
+            font:600 13px system-ui; cursor:pointer; }}
+  button:hover {{ background:#2ea043; }}
+  button.ghost {{ background:#21262d; border:1px solid #30363d; }}
+  button.ghost:hover {{ background:#30363d; }}
+  button.copied {{ background:#1f6feb; }}
+  .note {{ font-size:13px; color:#8b949e; margin:8px 0 0; }}
+  .warn {{ color:#d29922; }}
+  .expired {{ color:#f85149; font-weight:600; }}
+  a {{ color:#58a6ff; text-decoration:none; }}
+  a:hover {{ text-decoration:underline; }}
+  table {{ width:100%; border-collapse:collapse; font-size:13.5px; }}
+  th, td {{ text-align:left; padding:6px 8px; border-bottom:1px solid #21262d; }}
+  th {{ color:#8b949e; font-weight:600; font-size:12px; text-transform:uppercase;
+        letter-spacing:.05em; }}
+  td.mono {{ font-family:ui-monospace,Consolas,monospace; }}
+  ul {{ margin:6px 0 0; padding-left:18px; color:#8b949e; font-size:13px; }}
+  footer {{ margin-top:20px; font-size:13px; color:#8b949e; }}
+</style>
+</head>
+<body>
+<main>
+  <h1>MAR <span>·</span> config server</h1>
+  <p class="sub">Pushes your provider keys, model roles, and omp policy to boxes on this LAN.
+     Boxes must already have <strong>omp</strong> installed.</p>
+
+  <div class="card">
+    <h2>Linux / macOS</h2>
+    <code class="cmd" id="sh-cmd">{sh_cmd}</code>
+    <div class="row">
+      <button onclick="copyEl('sh-cmd', this)">Copy command</button>
+      <button class="ghost" onclick="copyFetch('/config.sh', this)">Copy payload</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Windows (PowerShell)</h2>
+    <code class="cmd" id="ps-cmd">{ps_cmd}</code>
+    <div class="row">
+      <button onclick="copyEl('ps-cmd', this)">Copy command</button>
+      <button class="ghost" onclick="copyFetch('/config.ps1', this)">Copy payload</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Services</h2>
+    <table>
+      <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th><th>Usage</th></tr>
+      {''.join(rows_html)}
+    </table>
+    <p class="note"><span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
+       LAN only; the firewall rule scopes this port to LocalSubnet.</p>
+  </div>
+
+  <footer>
+    <a href="{REPO_URL}">{REPO_URL}</a> · this server:
+    <ul style="display:inline; padding:0; list-style:none">{ips}</ul>
+  </footer>
+</main>
+<script>
+async function copyText(t, btn) {{
+  try {{ await navigator.clipboard.writeText(t); }}
+  catch (e) {{
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+  }}
+  const old = btn.textContent;
+  btn.textContent = 'Copied ✓'; btn.classList.add('copied');
+  setTimeout(() => {{ btn.textContent = old; btn.classList.remove('copied'); }}, 1400);
+}}
+function copyEl(id, btn) {{ copyText(document.getElementById(id).textContent.trim(), btn); }}
+async function copyFetch(path, btn) {{
+  const r = await fetch(path);
+  copyText(await r.text(), btn);
+}}
+</script>
+</body>
+</html>
+"""
 
 
 def lan_ips() -> list[str]:
@@ -88,10 +305,8 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
 
     Args:
         registry: Path to the MAR registry file, read per request (used
-            when ``backend`` is None).
-        backend: Optional storage backend name forwarded to the export
-            command per request (``vault`` reads from Vault instead of the
-            file).
+            unless a ``backend`` is given).
+        backend: Optional storage backend name (see ``render_config``).
 
     Returns:
         A ``BaseHTTPRequestHandler`` subclass serving the endpoints.
@@ -121,25 +336,8 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
                     "text/plain; charset=utf-8",
                 )
             elif self.path == "/":
-                ips = "\n".join(f"  http://{ip}" for ip in lan_ips())
                 self._send(
-                    200,
-                    "\n".join(
-                        [
-                            "MAR config server (LAN only, plain HTTP)",
-                            "",
-                            "Apply the current config on a box with omp:",
-                            f"  curl -fsSL http://{host}/config.sh | sh",
-                            "",
-                            "Windows box (PowerShell):",
-                            "  irm http://<this-host>/config.ps1 | iex",
-                            "",
-                            "This server's addresses:",
-                            ips,
-                            "",
-                        ]
-                    ),
-                    "text/plain; charset=utf-8",
+                    200, render_index_html(host, registry), "text/html; charset=utf-8"
                 )
             else:
                 self._send(404, "not found\n", "text/plain; charset=utf-8")
@@ -157,12 +355,12 @@ def serve(host: str, port: int, registry: Path, backend: str | None = None) -> N
         host: Bind address (``0.0.0.0`` for LAN reachability).
         port: TCP port to listen on.
         registry: Path to the MAR registry file (file backend).
-        backend: Optional storage backend name (see ``make_handler``).
+        backend: Optional storage backend name.
 
     Raises:
         OSError: If the port cannot be bound.
     """
-    server = ThreadingHTTPServer((host, port), make_handler(registry, backend=backend))
+    server = ThreadingHTTPServer((host, port), make_handler(registry, backend))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
