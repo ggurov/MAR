@@ -12,7 +12,7 @@ ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
 
 | # | id | display | omp_provider_id | credential route | key_url | limits_url | limits_kind |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | cursor-grok | Cursor / Grok | cursor | env `CURSOR_ACCESS_TOKEN` | https://cursor.com/settings | https://cursor.com/usage | manual |
+| 1 | cursor-grok | Cursor / Grok | cursor | env `CURSOR_ACCESS_TOKEN` | https://cursor.com/settings | https://cursor.com/dashboard/spending | manual |
 | 2 | codex | OpenAI Codex | openai-codex | env `OPENAI_CODEX_OAUTH_TOKEN` | https://platform.openai.com/api-keys | https://platform.openai.com/usage | manual |
 | 3 | claude | Anthropic Claude | anthropic | env `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys | https://console.anthropic.com/settings/usage | manual |
 | 4 | cline | Cline | cline-pass | agent.db login row | https://cline.bot | https://cline.bot | manual |
