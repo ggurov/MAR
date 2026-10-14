@@ -106,6 +106,40 @@ class TestServicesSnapshot:
         assert rows["zai"]["limits_url"].startswith("https://")
         assert rows["zai"]["usage"] is None  # only openrouter fetches live
 
+    @pytest.mark.parametrize(
+        ("offset_hours", "expected"),
+        [
+            (3, "in 3.0h"),
+            (144, "in ~6 days"),
+            (49, "in ~2 days"),
+            (365 * 24 + 1, ""),
+            (-1, "EXPIRED"),
+        ],
+    )
+    def test_renew_formatting_is_tiered(
+        self, registry_path, monkeypatch, offset_hours, expected
+    ):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "claude",
+                "auth_method": "oauth",
+                "key": "tok-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": int(time.time() * 1000)
+                + offset_hours * 3_600_000,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        assert rows["claude"]["renew"] == expected
+
     def test_omp_usage_fills_quota_and_renew_columns(
         self, registry_path, monkeypatch
     ):
@@ -375,7 +409,11 @@ class TestIndexHtml:
         assert "github.com/ggurov/MAR" in html
         assert "Services" in html
         assert "zai" in html and "openrouter" in html
-        assert "usage \u2197" in html  # usage-page links
+        assert (
+            '<a href="https://claude.ai/new#settings/usage" target="_blank"'
+            ' rel="noopener"><b>claude</b></a>' in html
+        )  # provider name doubles as the usage link
+        assert ">Usage<" not in html  # usage column dropped
         assert "resets in 2.0h" in html  # window reset rides the quota cell
         assert "in 3.0h" in html  # oauth token expiry stays in the renew cell
         assert "plan \u2197" not in html  # plan link removed from renew cell
