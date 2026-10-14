@@ -180,7 +180,7 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt OAuth logins (Claude, Codex) from local omp into the registry |
 | `mar export [--shell bash] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
-| `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request |
+| `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request — ops (Windows task, auto-restart, logs, re-register): [docs/serve-operations.md](docs/serve-operations.md) |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar rotate <provider> --key-stdin` | Replace one provider's key in place — models, default model, and notes are preserved |
 | `mar config [show\|backend]` | Show or switch the storage backend (file by default; optional Vault) |
@@ -255,6 +255,7 @@ feature branch → PR → squash merge.
   double-run idempotent.
 
 Full contracts: [docs/architecture.md](docs/architecture.md) ·
+server ops: [docs/serve-operations.md](docs/serve-operations.md) ·
 milestones: [PLAN.md](PLAN.md) ·
 provider data: [docs/providers.md](docs/providers.md) ·
 the original problem statement: [problem_statement.txt](problem_statement.txt).
