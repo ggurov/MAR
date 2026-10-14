@@ -16,12 +16,12 @@ ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
 | 2 | codex | OpenAI Codex | openai-codex | env `OPENAI_CODEX_OAUTH_TOKEN` | https://platform.openai.com/api-keys | https://platform.openai.com/usage | manual |
 | 3 | claude | Anthropic Claude | anthropic | env `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys | https://console.anthropic.com/settings/usage | manual |
 | 4 | cline | Cline | cline-pass | agent.db login row | https://cline.bot | https://cline.bot | manual |
-| 5 | opencode | OpenCode | opencode-go | agent.db login row | https://opencode.ai | https://opencode.ai | manual |
-| 6 | zai | Z.ai | zai | agent.db login row | https://z.ai/manage-apikey/apikey-list | https://z.ai | manual |
+| 5 | opencode | OpenCode | opencode-go | agent.db login row | https://opencode.ai | https://opencode.ai/console/ | manual |
+| 6 | zai | Z.ai | zai | agent.db login row | https://z.ai/manage-apikey/apikey-list | https://z.ai/manage-apikey/coding-plan/personal/usage | manual |
 | 7 | openrouter | OpenRouter | openrouter | agent.db login row | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | api |
 | 8 | antigravity | Google Antigravity | google-antigravity | agent.db (OAuth-first) | https://antigravity.google | https://antigravity.google | manual |
 | 9 | copilot | GitHub Copilot | github-copilot | env `COPILOT_GITHUB_TOKEN` | https://github.com/settings/tokens | https://github.com/settings/copilot | manual |
-| 10 | jev | Jev (Typesafe) | typesafe | env `TYPESAFE_API_KEY` | https://typesafe.ai | https://typesafe.ai | manual |
+| 10 | jev | Jev (Typesafe) | typesafe | env `TYPESAFE_API_KEY` | https://typesafe.ai | https://console.typesafe.ai/usage | manual |
 | 11 | gemini | Google Gemini | google | env `GEMINI_API_KEY` | https://aistudio.google.com/api/keys | https://aistudio.google.com/usage | manual |
 | 12 | commandcode | Command Code | commandcode | env `COMMAND_CODE_API_KEY` | https://commandcode.ai | https://commandcode.ai | manual |
 
