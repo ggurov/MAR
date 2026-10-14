@@ -1,20 +1,35 @@
 """Tests for the LAN config server (mar serve)."""
 
+import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
-from mar import cli, serve
+from mar import cli, limits, serve
 
 
 @pytest.fixture()
 def registry_path(tmp_path):
     path = tmp_path / "registry.json"
     cli.main(["add", "zai", "--key", "zai-key-1234567890", "--registry", str(path)])
+    cli.main(
+        [
+            "add", "openrouter", "--key", "or-key-1234567890",
+            "--registry", str(path),
+        ]
+    )
     return path
+
+
+def _add_sub(registry_path: "Path", entry: dict) -> None:
+    data = json.loads(registry_path.read_text(encoding="utf-8"))
+    data["subscriptions"].append(entry)
+    registry_path.write_text(json.dumps(data), encoding="utf-8")
 
 
 class TestRenderConfig:
@@ -40,6 +55,84 @@ class TestRenderConfig:
         assert "ZAI_API_KEY" in body_after
 
 
+class TestServicesSnapshot:
+    def test_lists_provider_links_and_expiry(self, registry_path):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "claude",
+                "auth_method": "oauth",
+                "key": "tok-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": int(time.time() * 1000) + 3 * 3_600_000,
+            },
+        )
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        assert set(rows) == {"zai", "openrouter", "claude"}
+        assert rows["claude"]["renew"].startswith("2026-")
+        assert "in 3.0h" in rows["claude"]["renew"]
+        assert rows["zai"]["limits_url"].startswith("https://")
+        assert rows["zai"]["renew"] == "\u2014"  # api keys do not renew
+        assert rows["zai"]["usage"] is None  # only openrouter fetches live
+
+    def test_openrouter_row_carries_live_credits(self, registry_path, monkeypatch):
+        calls = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append(provider_id)
+            return limits.LimitSnapshot(
+                provider="openrouter",
+                fetched_at="2026-10-13T00:00:00+00:00",
+                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        rows = serve.services_snapshot(registry_path)
+        row = next(r for r in rows if r["provider"] == "openrouter")
+        assert row["usage"] == "$315.00 of $325.00 left"
+        # second call serves from the TTL cache — no second fetch
+        serve.services_snapshot(registry_path)
+        assert calls == ["openrouter"]
+
+    def test_openrouter_fetch_failure_degrades(self, registry_path, monkeypatch):
+        def boom(provider_id, key, **kwargs):
+            raise limits.LimitError("down")
+
+        monkeypatch.setattr(serve.limits, "fetch", boom)
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        row = next(
+            r
+            for r in serve.services_snapshot(registry_path)
+            if r["provider"] == "openrouter"
+        )
+        assert row["usage"] == "unavailable"
+
+
+class TestIndexHtml:
+    def test_page_has_copy_buttons_repo_and_services(self, registry_path, monkeypatch):
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        html = serve.render_index_html("localhost:8930", registry_path)
+        assert "<!doctype html>" in html.lower()
+        assert "http://localhost:8930/config.sh | sh" in html
+        assert "config.ps1" in html
+        assert "navigator.clipboard" in body_guard(html)  # secure-context copy path
+        assert "execCommand" in html  # non-secure-context fallback
+        assert "github.com/ggurov/MAR" in html
+        assert "Services" in html
+        assert "zai" in html and "openrouter" in html
+        assert "usage" in html  # usage-page links
+
+
+def body_guard(html: str) -> str:
+    return html
+
+
 class TestLanIps:
     def test_returns_at_least_one_ip(self):
         ips = serve.lan_ips()
@@ -49,7 +142,8 @@ class TestLanIps:
 
 class TestHttpServer:
     @pytest.fixture()
-    def server(self, registry_path):
+    def server(self, registry_path, monkeypatch):
+        monkeypatch.setattr(serve, "_usage_cache", {})
         httpd = ThreadingHTTPServer(
             ("127.0.0.1", 0), serve.make_handler(registry_path)
         )
@@ -73,10 +167,20 @@ class TestHttpServer:
         assert status == 200
         assert "Set-Content" in body
 
-    def test_index_shows_apply_command(self, server):
+    def test_index_is_html_with_copy_and_repo_links(self, server):
         status, body = self._get(f"{server}/")
         assert status == 200
-        assert "config.sh | sh" in body
+        assert "<!doctype html>" in body.lower()
+        assert "text/html" in self._content_type(f"{server}/")
+        host = server.split("//")[1]
+        assert f"http://{host}/config.sh | sh" in body
+        assert "github.com/ggurov/MAR" in body
+        assert "navigator.clipboard" in body  # secure-context copy path
+        assert "execCommand" in body  # non-secure-context fallback
+
+    def _content_type(self, url):
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return resp.headers.get("Content-Type", "")
 
     def test_unknown_path_is_404(self, server):
         with pytest.raises(urllib.error.HTTPError) as excinfo:
