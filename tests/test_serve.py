@@ -56,7 +56,7 @@ class TestRenderConfig:
 
 
 class TestServicesSnapshot:
-    def test_lists_provider_links_and_expiry(self, registry_path):
+    def test_lists_provider_links_and_expiry(self, registry_path, monkeypatch):
         _add_sub(
             registry_path,
             {
@@ -71,13 +71,118 @@ class TestServicesSnapshot:
                 "expires_at_ms": int(time.time() * 1000) + 3 * 3_600_000,
             },
         )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)  # no windows
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         assert set(rows) == {"zai", "openrouter", "claude"}
         assert rows["claude"]["renew"].startswith("2026-")
-        assert "in 3.0h" in rows["claude"]["renew"]
+        assert "in 3.0h" in rows["claude"]["renew"]  # token expiry fallback
         assert rows["zai"]["limits_url"].startswith("https://")
         assert rows["zai"]["renew"] == "\u2014"  # api keys do not renew
         assert rows["zai"]["usage"] is None  # only openrouter fetches live
+
+    def test_omp_usage_fills_quota_and_renew_columns(
+        self, registry_path, monkeypatch
+    ):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "claude",
+                "auth_method": "oauth",
+                "key": "tok-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "anthropic",
+                        "limits": [
+                            {
+                                "id": "anthropic:5h",
+                                "amount": {
+                                    "remaining": 100,
+                                    "limit": 100,
+                                    "unit": "percent",
+                                },
+                                "window": {},
+                            },
+                            {
+                                "id": "anthropic:7d",
+                                "amount": {
+                                    "remaining": 40,
+                                    "limit": 100,
+                                    "unit": "percent",
+                                },
+                                "window": {"resetsAt": 1792238400422},
+                            },
+                        ],
+                    }
+                ]
+            },
+        )
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        assert rows["claude"]["usage"] == "5h 100% \u00b7 7d 40%"
+        assert "2026-10-17" in rows["claude"]["renew"]  # earliest resetsAt wins
+
+    def test_omp_usage_failure_keeps_page_alive(
+        self, registry_path, monkeypatch
+    ):
+        def boom():
+            raise OSError("omp missing")
+
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", boom)
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        assert rows["zai"]["usage"] is None
+        assert rows["zai"]["renew"] == "\u2014"
+
+    def test_formatter_handles_missing_remaining(self, monkeypatch):
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "commandcode",
+                        "limits": [
+                            {
+                                "id": "commandcode:5h",
+                                "amount": {"remaining": None, "limit": 14, "unit": "cre"},
+                                "window": {"resetsAt": 1792283530102},
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        cell, earliest = serve._format_limits(
+            serve._omp_usage().get("commandcode", [])
+            + [
+                {
+                    "id": "copilot:chat",
+                    "amount": {"remaining": 200, "limit": 200, "unit": "requests"},
+                    "window": {},
+                }
+            ]
+        )
+        assert "5h \u2013/14 cr" in cell
+        assert "chat 200/200 req" in cell
+        assert earliest == 1792283530102
 
     def test_openrouter_row_carries_live_credits(self, registry_path, monkeypatch):
         calls = []
@@ -117,6 +222,8 @@ class TestServicesSnapshot:
 class TestIndexHtml:
     def test_page_has_copy_buttons_repo_and_services(self, registry_path, monkeypatch):
         monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
         html = serve.render_index_html("localhost:8930", registry_path)
         assert "<!doctype html>" in html.lower()
         assert "http://localhost:8930/config.sh | sh" in html
