@@ -150,6 +150,8 @@ hashline edit mode with deepseek pinned to it, and your machine's `statusLine`
 also pins approval to yolo (`omp config set tools.approvalMode yolo` — matches
 omp's default; explicit so defaults can't surprise). Vibe mode itself is a
 per-session toggle: run `/vibe` in the omp session (no config key exists);
+advisor engagement is pinned OFF for task/vibe workers (`task.agentAdvisor` =
+`{"task":"off"}` — flip to `"on"` to let workers consult the advisor role);
 task/vibe worker routing follows `modelRoles.task` (unset = the default model).
 The block also sets
 `PI_STRICT_EDIT_MODE=1` in the agent `.env` — omp's silent per-family fallback
