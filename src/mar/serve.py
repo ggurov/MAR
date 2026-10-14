@@ -153,20 +153,44 @@ def _omp_id_map() -> dict[str, str]:
     }
 
 
+def _format_duration(hours: float) -> str:
+    """Format a window reset countdown for the quota cell.
+
+    Args:
+        hours: Hours until the window resets; negative once past.
+
+    Returns:
+        ``"now"`` when ``hours <= 0``; ``"2.0h"`` under 48 hours;
+        ``"~8 days"`` beyond that.
+    """
+    if hours <= 0:
+        return "now"
+    if hours < 48:
+        return f"{hours:.1f}h"
+    days = round(hours / 24)
+    return f"~{days} day" if days == 1 else f"~{days} days"
+
+
 def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
     """Format omp usage limits into one quota cell plus earliest reset.
+
+    Every window contributes a piece: quantified windows render their
+    amount plus a parenthesized reset when the window reports one, and
+    reset-only windows render as ``"<label> resets in X"``.
 
     Args:
         items: The ``limits`` list of one ``omp usage`` report.
 
     Returns:
         ``(cell, earliest_reset_ms)`` where ``cell`` is like
-        ``"5h 100% · 7d 40%"`` (``None`` when nothing is quantified) and
+        ``"5h 100% · 7d 40% (resets in 4.0h)"`` (``None`` when every
+        window lacks both an amount and a reset) and
         ``earliest_reset_ms`` is the soonest window reset (``None`` when
         no window reports one).
     """
     parts: list[str] = []
     earliest: int | None = None
+    now = time.time()
     for item in items:
         amount = item.get("amount") or {}
         remaining, cap, unit = amount.get("remaining"), amount.get("limit"), (amount.get("unit") or "")
@@ -174,20 +198,26 @@ def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
         reset = window.get("resetsAt")
         if reset is not None and (earliest is None or reset < earliest):
             earliest = int(reset)
-        if remaining is None and cap is None:
-            continue
+        resets = ""
+        if reset is not None:
+            resets = f"resets in {_format_duration((reset / 1000 - now) / 3600)}"
         label = item.get("id", "?").rsplit(":", 1)[-1]
+        if remaining is None and cap is None:
+            if resets:
+                parts.append(f"{label} {resets}")
+            continue
         if unit == "percent":
-            parts.append(f"{label} {(remaining or 0):.0f}%")
+            base = f"{label} {(remaining or 0):.0f}%"
         elif unit == "usd":
-            parts.append(f"{label} ${(remaining or 0):.2f}")
+            base = f"{label} ${(remaining or 0):.2f}"
         else:
             suffix = "cr" if unit.startswith("cre") else ("req" if unit.startswith("req") else unit)
             used = f"{remaining:g}" if remaining is not None else "\u2013"
             if cap:
-                parts.append(f"{label} {used}/{cap:g} {suffix}".rstrip())
+                base = f"{label} {used}/{cap:g} {suffix}".rstrip()
             else:
-                parts.append(f"{label} {used} {suffix}".rstrip())
+                base = f"{label} {used} {suffix}".rstrip()
+        parts.append(f"{base} ({resets})" if resets else base)
     return (" \u00b7 ".join(parts) if parts else None), earliest
 
 
@@ -219,13 +249,13 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
 
     Returns:
         One dict per active subscription with keys ``provider``,
-        ``auth``, ``usage`` (quota text from ``omp usage`` windows — with
-        a trailing ``resets in X.Xh`` / ``resets EXPIRED`` for the
-        soonest window reset — or the OpenRouter credits fetch; ``None``
-        when a provider reports neither), ``renew`` (oauth token expiry
-        only: ``in 7.9h`` under 48 hours, ``in ~N days`` under a year,
-        ``""`` for longer-lived tokens, ``EXPIRED`` once past; ``—``
-        for api keys and rows without an expiry), and ``limits_url``.
+        ``auth``, ``usage`` (quota text from ``omp usage`` windows —
+        each window carries its own ``resets in X`` countdown — or the
+        OpenRouter credits fetch; ``None`` when a provider reports
+        neither), ``renew`` (oauth token expiry only: ``in 7.9h`` under
+        48 hours, ``in ~N days`` under a year, ``""`` for longer-lived
+        tokens, ``EXPIRED`` once past; ``—`` for api keys and rows
+        without an expiry), and ``limits_url``.
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -237,13 +267,9 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         except KeyError:
             limits_url = ""
         omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
-        quota, earliest_reset = _format_limits(omp_limits)
+        quota, _ = _format_limits(omp_limits)
         if quota is None and sub.provider == "openrouter":
             quota = _usage_cell(sub.provider, sub.key)
-        if earliest_reset is not None:
-            hours = (earliest_reset / 1000 - time.time()) / 3600
-            resets = f"resets in {hours:.1f}h" if hours > 0 else "resets EXPIRED"
-            quota = f"{quota} \u00b7 {resets}" if quota else resets
         if sub.auth_method == "oauth" and sub.expires_at_ms:
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
             renew = _format_renew(hours)

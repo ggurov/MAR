@@ -101,7 +101,7 @@ class TestServicesSnapshot:
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         assert set(rows) == {"zai", "openrouter", "claude"}
         assert rows["claude"]["renew"] == "in 3.0h"  # oauth token expiry
-        assert rows["claude"]["usage"] == "5h 90% \u00b7 resets in 2.0h"
+        assert rows["claude"]["usage"] == "5h 90% (resets in 2.0h)"
         assert rows["zai"]["renew"] == "\u2014"  # api keys: nothing expires
         assert rows["zai"]["limits_url"].startswith("https://")
         assert rows["zai"]["usage"] is None  # only openrouter fetches live
@@ -192,7 +192,7 @@ class TestServicesSnapshot:
             },
         )
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
-        assert rows["claude"]["usage"] == "5h 100% \u00b7 7d 40% \u00b7 resets in 4.0h"
+        assert rows["claude"]["usage"] == "5h 100% \u00b7 7d 40% (resets in 4.0h)"
         assert rows["claude"]["renew"] == "\u2014"  # oauth row without expiry
 
     def test_reset_only_windows_quantify_quota(self, registry_path, monkeypatch):
@@ -234,8 +234,62 @@ class TestServicesSnapshot:
             },
         )
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
-        assert rows["opencode"]["usage"] == "resets in 2.0h"  # reset-only window
+        assert rows["opencode"]["usage"] == "5h resets in 2.0h"  # reset-only window
         assert rows["opencode"]["renew"] == "\u2014"  # api keys never renew
+
+    def test_every_window_carries_its_own_reset_timeline(self, registry_path, monkeypatch):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "opencode",
+                "auth_method": "api_key",
+                "key": "oc-key-1234567890",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        now_ms = int(time.time() * 1000)
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "opencode-go",
+                        "limits": [
+                            {
+                                "id": "opencode-go:rolling-5h",
+                                "amount": {},
+                                "window": {"resetsAt": now_ms + 2 * 3_600_000},
+                            },
+                            {
+                                "id": "opencode-go:weekly",
+                                "amount": {},
+                                "window": {"resetsAt": now_ms + 27 * 3_600_000},
+                            },
+                            {
+                                "id": "opencode-go:monthly",
+                                "amount": {},
+                                "window": {"resetsAt": now_ms + 8 * 24 * 3_600_000},
+                            },
+                        ],
+                    }
+                ]
+            },
+        )
+        rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
+        assert (
+            rows["opencode"]["usage"]
+            == "rolling-5h resets in 2.0h \u00b7 weekly resets in 27.0h"
+            " \u00b7 monthly resets in ~8 days"
+        )
+        assert rows["opencode"]["renew"] == "\u2014"
 
     def test_api_key_rows_never_show_window_resets(self, registry_path, monkeypatch):
         _add_sub(
@@ -272,7 +326,7 @@ class TestServicesSnapshot:
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         for pid in ("zai", "openrouter", "commandcode"):
             assert rows[pid]["renew"] == "\u2014"  # api keys carry no renewal
-            assert rows[pid]["usage"] == "5h 50% \u00b7 resets in 2.0h"
+            assert rows[pid]["usage"] == "5h 50% (resets in 2.0h)"
 
     def test_omp_usage_failure_keeps_page_alive(
         self, registry_path, monkeypatch
@@ -320,6 +374,7 @@ class TestServicesSnapshot:
         )
         assert "5h \u2013/14 cr" in cell
         assert "chat 200/200 req" in cell
+        assert "resets" in cell
         assert earliest == 1792283530102
 
     def test_openrouter_row_carries_live_credits(self, registry_path, monkeypatch):
