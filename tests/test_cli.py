@@ -326,7 +326,11 @@ class TestExport:
         assert re.search(r"(?m)^\s*else\b", out) is None
         for line in out.splitlines():
             if line.startswith("if ("):
-                assert line.rstrip().endswith("}"), f"dangling if-block line: {line!r}"
+                # One-line ifs close on the same line; the version branch
+                # opens a block with `{` and closes it on its own `}` line.
+                assert line.rstrip().endswith(("}", "{")), (
+                    f"dangling if-block line: {line!r}"
+                )
 
     def test_export_roles_bash_variant(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "iso-agent"
@@ -418,12 +422,63 @@ class TestExport:
         captured = capsys.readouterr()
         out = captured.out
         assert "omp config set edit.mode hashline" in out
-        assert 'omp config set statusLine.leftSegments \'["vim","hostname"]\'' in out
+        assert (
+            'omp --% config set edit.modelVariants "{\\"deepseek\\":\\"hashline\\"}"'
+            in out
+        )
+        assert (
+            'omp --% config set statusLine.leftSegments "[\\"vim\\",\\"hostname\\"]"'
+            in out
+        )
         assert "omp config set tools.approvalMode yolo" in out
-        assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert 'omp --% config set task.agentAdvisor "{\\"task\\":\\"off\\"}"' in out
         assert "omp config set hideThinkingBlock true" in out
         assert "advisor engagement is pinned OFF" in captured.err
         assert ".bashrc" not in out
+
+    def test_export_powershell_json_args_pick_legacy_or_standard(
+        self, reg_path, tmp_path, capsys
+    ):
+        """PS 5.1-7.2 need ``--%``; PS 7.3+ needs the plain string form."""
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        (agent_dir / "config.yml").write_text(
+            "statusLine:\n"
+            "  leftSegments: [vim, hostname]\n"
+            "  rightSegments: [token_total, cost]\n",
+            encoding="utf-8",
+        )
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        legacy = (
+            'omp --% config set edit.modelVariants "{\\"deepseek\\":\\"hashline\\"}"'
+        )
+        modern = "omp config set edit.modelVariants '{\"deepseek\":\"hashline\"}'"
+        assert "$marNap = Get-Variable PSNativeCommandArgumentPassing" in out
+        assert "if ($PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $marNap" in out
+        assert "} else {" in out
+        assert out.index(legacy) < out.index("} else {") < out.index(modern)
+        assert (
+            'omp --% config set task.agentAdvisor "{\\"task\\":\\"off\\"}"' in out
+        )
+        assert (
+            'omp --% config set statusLine.leftSegments'
+            ' "[\\"vim\\",\\"hostname\\"]"' in out
+        )
+        assert (
+            'omp --% config set statusLine.rightSegments'
+            ' "[\\"token_total\\",\\"cost\\"]"' in out
+        )
+        assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert (
+            "omp config set statusLine.leftSegments '[\"vim\",\"hostname\"]'" in out
+        )
+        assert (
+            "omp config set statusLine.rightSegments '[\"token_total\",\"cost\"]'"
+            in out
+        )
 
     def test_export_without_local_statusline_skips_statusline(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")

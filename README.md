@@ -164,6 +164,12 @@ refresh; export warns when a token is already dead or dying. Skip notes
 (providers without env routes, e.g. antigravity → `/login google-antigravity`)
 print to stderr, never into the block.
 
+PowerShell JSON-valued config lines come in a version branch: 5.1-7.2 use the
+`--%` stop-parsing token (legacy native-argument passing strips embedded
+quotes), while 7.3+ uses the plain string form (it re-escapes arguments even
+after `--%`). The payload selects the branch at run time from
+`$PSNativeCommandArgumentPassing`.
+
 ### Start a session right
 
 ```powershell
