@@ -383,6 +383,25 @@ def _cmd_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ps_verbatim_arg(value: str) -> str:
+    """Quote one argument for a PowerShell ``--%`` stop-parsing line.
+
+    Windows PowerShell 5.1 through 7.2 use Legacy native-argument
+    passing, which drops embedded double quotes and mangles JSON values.
+    ``--%`` forwards the rest of the line verbatim; the value must already
+    be double-quoted with embedded quotes backslash-escaped for the native
+    argv parser. PowerShell 7.3+ re-escapes arguments even after ``--%``,
+    so it uses the plain string form instead.
+
+    Args:
+        value: Raw argument text, e.g. ``'{"a":"b"}'``.
+
+    Returns:
+        The double-quoted, backslash-escaped argument.
+    """
+    return '"' + value.replace('"', '\\"') + '"'
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
     reg = _load(args)
     pairs: list[tuple[str, str]] = []
@@ -498,13 +517,25 @@ def _cmd_export(args: argparse.Namespace) -> int:
 
     # Edit policy: hashline everywhere; deepseek explicitly pinned (other
     # agent stacks silently downgrade deepseek to a weaker edit format).
-    settings_lines = [
-        "omp config set edit.mode hashline",
-        'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
-        "omp config set tools.approvalMode yolo",
-        'omp config set task.agentAdvisor \'{"task":"off"}\'',
-        "omp config set hideThinkingBlock true",
+    # (key, value, json_value) — JSON args need per-shell quoting.
+    settings = [
+        ("edit.mode", "hashline", False),
+        ("edit.modelVariants", '{"deepseek":"hashline"}', True),
+        ("tools.approvalMode", "yolo", False),
+        ("task.agentAdvisor", '{"task":"off"}', True),
+        ("hideThinkingBlock", "true", False),
     ]
+    settings_lines: list[str] = []
+    ps_scalar_lines: list[str] = []
+    ps_json_values: list[tuple[str, str]] = []
+    for key, value, json_value in settings:
+        if json_value:
+            settings_lines.append(f"omp config set {key} '{value}'")
+            ps_json_values.append((key, value))
+        else:
+            line = f"omp config set {key} {value}"
+            settings_lines.append(line)
+            ps_scalar_lines.append(line)
     notes.append(
         "edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)"
     )
@@ -531,14 +562,41 @@ def _cmd_export(args: argparse.Namespace) -> int:
         notes.append(f"statusLine not exported: {exc}")
     if status_line:
         if "preset" in status_line:
-            settings_lines.append(f"omp config set statusLine.preset {status_line['preset']}")
+            line = f"omp config set statusLine.preset {status_line['preset']}"
+            settings_lines.append(line)
+            ps_scalar_lines.append(line)
         for key in ("leftSegments", "rightSegments"):
             if key in status_line:
                 value = json.dumps(status_line[key], separators=(",", ":"))
                 settings_lines.append(f"omp config set statusLine.{key} '{value}'")
+                ps_json_values.append((f"statusLine.{key}", value))
         notes.append("statusLine cloned (hostname stays in the prompt)")
     else:
         notes.append("statusLine not exported: not set on this machine")
+
+    # PowerShell 5.1-7.2 use Legacy native-argument passing, which drops the
+    # embedded quotes of a JSON string; there `--%` forwards the escaped form
+    # verbatim. PowerShell 7.3+ (Standard/Windows) re-escapes arguments after
+    # `--%`, so its correct form is the plain single-quoted string. Choose at
+    # run time: the preference variable is absent before 7.2.
+    ps_settings_lines: list[str] = [*ps_scalar_lines]
+    ps_settings_lines.append(
+        "$marNap = Get-Variable PSNativeCommandArgumentPassing"
+        " -ValueOnly -ErrorAction SilentlyContinue"
+    )
+    ps_settings_lines.append(
+        "if ($PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $marNap"
+        " -or $marNap -eq 'Legacy') {"
+    )
+    ps_settings_lines.extend(
+        f"omp --% config set {key} {_ps_verbatim_arg(value)}"
+        for key, value in ps_json_values
+    )
+    ps_settings_lines.append("} else {")
+    ps_settings_lines.extend(
+        f"omp config set {key} '{value}'" for key, value in ps_json_values
+    )
+    ps_settings_lines.append("}")
 
     # omp's curl|sh installer drops the binary in ~/.local/bin, which is not
     # on PATH on many minimal Linux setups. bash only — bashrc is a bash file.
@@ -579,7 +637,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                     "if ((Test-Path $cfg) -and -not (Select-String -Path $cfg -Pattern '(?m)^modelRoles:' -Quiet)) { if (-not (Get-Content $cfg -Raw).EndsWith(\"`n\")) { Add-Content $cfg '' }; Add-Content $cfg $roles }",
                 ]
             )
-        body = "\n".join([body, *settings_lines])
+        body = "\n".join([body, *ps_settings_lines])
     else:
         body = "\n".join(
             [
