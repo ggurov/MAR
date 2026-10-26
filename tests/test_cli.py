@@ -402,6 +402,8 @@ class TestExport:
         assert "omp config set tools.approvalMode yolo" in out
         assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
         assert "omp config set hideThinkingBlock true" in out
+        assert "omp config set composer.tokenRate true" in out
+        assert "generation rate display" in captured.err
         assert "thinking blocks hidden" in captured.err
         assert "advisor engagement is pinned OFF" in captured.err
         assert "approval pinned to yolo" in captured.err
@@ -433,6 +435,7 @@ class TestExport:
         assert "omp config set tools.approvalMode yolo" in out
         assert 'omp --% config set task.agentAdvisor "{\\"task\\":\\"off\\"}"' in out
         assert "omp config set hideThinkingBlock true" in out
+        assert "omp config set composer.tokenRate true" in out
         assert "advisor engagement is pinned OFF" in captured.err
         assert ".bashrc" not in out
 

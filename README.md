@@ -155,7 +155,9 @@ advisor engagement is pinned OFF for task/vibe workers (`task.agentAdvisor` =
 task/vibe worker routing follows `modelRoles.task` (unset = the default model).
 Thinking blocks are hidden by default (`hideThinkingBlock` = `true`,
 display-only — `--hide-thinking` is the per-run override; flip the config back
-to see them). The block also sets
+to see them). The generation-rate readout is on by default
+(`composer.tokenRate` = `true` — live tok/s next to the session title; flip
+with `omp config set composer.tokenRate false`). The block also sets
 `PI_STRICT_EDIT_MODE=1` in the agent `.env` — omp's silent per-family fallback
 to `replace` (GLM Flash, DeepSeek, Kimi, …) is disabled, so a model that can't
 cope fails visibly instead of quietly downgrading. OAuth tokens in the

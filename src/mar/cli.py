@@ -524,6 +524,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
         ("tools.approvalMode", "yolo", False),
         ("task.agentAdvisor", '{"task":"off"}', True),
         ("hideThinkingBlock", "true", False),
+        ("composer.tokenRate", "true", False),
     ]
     settings_lines: list[str] = []
     ps_scalar_lines: list[str] = []
@@ -549,6 +550,10 @@ def _cmd_export(args: argparse.Namespace) -> int:
     notes.append(
         "thinking blocks hidden (display only; --hide-thinking is per-run; "
         "flip with: omp config set hideThinkingBlock false)"
+    )
+    notes.append(
+        "generation rate display on (live tok/s readout; "
+        "flip with: omp config set composer.tokenRate false)"
     )
 
     # statusLine cloned from this machine so fresh boxes keep the hostname

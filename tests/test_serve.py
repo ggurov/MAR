@@ -38,6 +38,7 @@ class TestRenderConfig:
         assert "ZAI_API_KEY=zai-key-1234567890" in body
         assert "omp config set edit.mode hashline" in body
         assert "PI_STRICT_EDIT_MODE=1" in body
+        assert "omp config set composer.tokenRate true" in body
         assert "BEGIN" not in body
         assert "END" not in body
 
