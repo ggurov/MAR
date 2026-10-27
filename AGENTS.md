@@ -17,6 +17,7 @@ the wrong repo.
 | Lint | `uv run ruff check src tests` |
 | Format | `uv run ruff format src tests` |
 | Run the CLI | `uv run mar --help` |
+| Deploy the container | `docker compose -f /ssd/swarm/mar/docker-compose.yml up -d --build` |
 
 Python >= 3.12, managed by uv. Runtime deps: stdlib + `pyyaml` only. Adding a
 runtime dependency requires a PLAN.md entry saying why.
@@ -32,6 +33,11 @@ runtime dependency requires a PLAN.md entry saying why.
 5. Refactor. Keep modules under 300 lines; split by concept, not by size.
 6. Run the FULL suite: `uv run pytest`.
 7. Commit — **green state only**.
+8. If `src/`, `pyproject.toml`, or `Dockerfile` changed, redeploy:
+   `docker compose -f /ssd/swarm/mar/docker-compose.yml up -d --build`,
+   then verify the change is visible in the served `/config.sh`. The container
+   runs the baked image, not your checkout, so an un-rebuilt container serves
+   stale code.
 
 Commit messages: `test:`, `feat:`, `fix:`, `docs:`, `chore:` + imperative
 subject. Red states live in your working tree, never in history — history must
@@ -101,3 +107,5 @@ PLAN.md          # milestones + acceptance criteria; update when scope changes
 - If `cli.py` surface changed: `uv run mar <cmd> --help` and one real
   invocation against a `MAR_HOME` in `tmp` exercised it.
 - PLAN.md updated if scope moved.
+- If `src/` changed: the `swarm-mar` container rebuilt/redeployed and the
+  change observed in `curl -fsS http://127.0.0.1:8930/config.sh`.
