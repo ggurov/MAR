@@ -20,6 +20,8 @@ PROVIDER_IDS = providers.ids()
 
 _EXPORT_BEGIN = "# ================================================================ BEGIN =========================="
 _EXPORT_END = "# ================================================================ END ============================"
+DEFAULT_GLOBAL_MEMORY_URL = "http://hub.nj02.gurov.us:8888"
+
 
 
 def _backend_flag(parser: argparse.ArgumentParser) -> None:
@@ -143,6 +145,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_exp.add_argument(
         "--output", default=None, metavar="PATH", help="write pastable to file instead of stdout"
+    )
+    p_exp.add_argument(
+        "--memory",
+        choices=("on", "off"),
+        default="on",
+        help="global memory: 'on' configures the hindsight backend; "
+        "'off' emits memory.backend off (no memory on the box)",
+    )
+    p_exp.add_argument(
+        "--memory-url",
+        default=None,
+        metavar="URL",
+        help="hindsight API URL (default: $MAR_MEMORY_URL or "
+        f"{DEFAULT_GLOBAL_MEMORY_URL})",
     )
     p_exp.add_argument("--registry", default=None, metavar="PATH")
     _backend_flag(p_exp)
@@ -515,6 +531,13 @@ def _cmd_export(args: argparse.Namespace) -> int:
             + " (config.yml; skipped there if modelRoles already exists)"
         )
 
+    memory_enabled = getattr(args, "memory", "on") != "off"
+    memory_url = (
+        getattr(args, "memory_url", None)
+        or os.environ.get("MAR_MEMORY_URL")
+        or DEFAULT_GLOBAL_MEMORY_URL
+    )
+
     # Edit policy: hashline everywhere; deepseek explicitly pinned (other
     # agent stacks silently downgrade deepseek to a weaker edit format).
     # (key, value, json_value) — JSON args need per-shell quoting.
@@ -526,6 +549,13 @@ def _cmd_export(args: argparse.Namespace) -> int:
         ("hideThinkingBlock", "true", False),
         ("composer.tokenRate", "true", False),
     ]
+    if memory_enabled:
+        settings += [
+            ("memory.backend", "hindsight", False),
+            ("hindsight.apiUrl", memory_url, False),
+        ]
+    else:
+        settings.append(("memory.backend", "off", False))
     settings_lines: list[str] = []
     ps_scalar_lines: list[str] = []
     ps_json_values: list[tuple[str, str]] = []
@@ -555,6 +585,16 @@ def _cmd_export(args: argparse.Namespace) -> int:
         "generation rate display on (live tok/s readout; "
         "flip with: omp config set composer.tokenRate false)"
     )
+    if memory_enabled:
+        notes.append(
+            f"global memory: hindsight backend at {memory_url} "
+            "(toggle with --memory off to write memory.backend off)"
+        )
+    else:
+        notes.append(
+            "memory disabled: memory.backend off "
+            "(the box will not use any memory backend)"
+        )
 
     # statusLine cloned from this machine so fresh boxes keep the hostname
     # segment in the prompt display.

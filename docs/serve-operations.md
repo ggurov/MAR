@@ -100,7 +100,8 @@ WScript.Quit CreateObject("Wscript.Shell").Run("%USERPROFILE%\mar-serve.cmd", 0,
 
 ```
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8930/            # 200
-curl -s http://localhost:8930/config.sh | grep -c 'hideThinkingBlock\|composer.tokenRate'        # 2
+curl -s http://localhost:8930/config.sh | grep -c 'hideThinkingBlock\|composer.tokenRate\|memory.backend hindsight'  # 3
+curl -s 'http://localhost:8930/config.sh?memory=off' | grep -c 'memory.backend off'  # 1
 ```
 
 Check content, not just status — a stale process from an older code revision
