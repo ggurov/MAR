@@ -55,6 +55,16 @@ class TestRenderConfig:
         assert "ZAI_API_KEY" not in body_before
         assert "ZAI_API_KEY" in body_after
 
+    def test_memory_defaults_to_global_hindsight(self, registry_path):
+        body = serve.render_config(registry_path, "bash")
+        assert "omp config set memory.backend hindsight" in body
+        assert f"omp config set hindsight.apiUrl {cli.DEFAULT_GLOBAL_MEMORY_URL}" in body
+
+    def test_memory_off_emits_no_memory_config(self, registry_path):
+        body = serve.render_config(registry_path, "bash", memory="off")
+        assert "omp config set memory.backend off" in body
+        assert "hindsight" not in body
+
 
 class TestServicesSnapshot:
     def test_lists_provider_links_and_expiry(self, registry_path, monkeypatch):
@@ -519,7 +529,9 @@ class TestIndexHtml:
         )
         html = serve.render_index_html("localhost:8930", registry_path)
         assert "<!doctype html>" in html.lower()
-        assert "http://localhost:8930/config.sh | sh" in html
+        assert "http://localhost:8930/config.sh?memory=on | sh" in html
+        assert 'id="global-memory"' in html
+        assert "configure global memory" in html
         assert "config.ps1" in html
         assert "navigator.clipboard" in body_guard(html)  # secure-context copy path
         assert "execCommand" in html  # non-secure-context fallback
@@ -584,10 +596,28 @@ class TestHttpServer:
         assert "<!doctype html>" in body.lower()
         assert "text/html" in self._content_type(f"{server}/")
         host = server.split("//")[1]
-        assert f"http://{host}/config.sh | sh" in body
+        assert f"http://{host}/config.sh?memory=on | sh" in body
+        assert 'id="global-memory"' in body
         assert "github.com/ggurov/MAR" in body
         assert "navigator.clipboard" in body  # secure-context copy path
         assert "execCommand" in body  # non-secure-context fallback
+
+    def test_config_sh_memory_on_by_default(self, server):
+        _, body = self._get(f"{server}/config.sh")
+        assert "omp config set memory.backend hindsight" in body
+        assert "omp config set hindsight.apiUrl http://hub.nj02.gurov.us:8888" in body
+
+    def test_config_sh_memory_off_unconfigures(self, server):
+        status, body = self._get(f"{server}/config.sh?memory=off")
+        assert status == 200
+        assert "omp config set memory.backend off" in body
+        assert "hindsight" not in body
+
+    def test_config_ps1_memory_off(self, server):
+        status, body = self._get(f"{server}/config.ps1?memory=off")
+        assert status == 200
+        assert "omp config set memory.backend off" in body
+        assert "hindsight" not in body
 
     def _content_type(self, url):
         with urllib.request.urlopen(url, timeout=5) as resp:

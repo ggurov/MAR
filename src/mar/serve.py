@@ -18,10 +18,12 @@ import contextlib
 import html as html_mod
 import io
 import json
+import os
 import socket
 import subprocess
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -32,7 +34,9 @@ _USAGE_TTL_SECONDS = 60.0
 _usage_cache: dict[str, tuple[float, str]] = {}
 
 
-def render_config(registry: Path, shell: str, backend: str | None = None) -> str:
+def render_config(
+    registry: Path, shell: str, backend: str | None = None, memory: str = "on"
+) -> str:
     """Render the ``mar export`` payload for one shell, minus the markers.
 
     Args:
@@ -40,6 +44,8 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         shell: ``"bash"`` or ``"powershell"``.
         backend: Optional storage backend name; when given it is passed
             through, otherwise the file backend is forced via the path.
+        memory: ``"on"`` (default) configures the global hindsight backend;
+            ``"off"`` writes ``memory.backend off`` so the box stops using memory.
 
     Returns:
         The payload body exactly as ``mar export`` prints between the
@@ -56,6 +62,7 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         argv += ["--backend", backend]
     else:
         argv += ["--registry", str(registry)]
+    argv += ["--memory", memory]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         cli.main(argv)
     lines = [
@@ -308,8 +315,9 @@ def render_index_html(host: str, registry: Path) -> str:
         (quota, renewal, provider usage link), a plaintext-HTTP warning, and the
         GitHub repo link.
     """
-    sh_cmd = f"curl -fsSL http://{host}/config.sh | sh"
-    ps_cmd = f"irm http://{host}/config.ps1 | iex"
+    sh_cmd = f"curl -fsSL http://{host}/config.sh?memory=on | sh"
+    ps_cmd = f"irm http://{host}/config.ps1?memory=on | iex"
+    memory_url = os.environ.get("MAR_MEMORY_URL") or cli.DEFAULT_GLOBAL_MEMORY_URL
     rows_html: list[str] = []
     for row in services_snapshot(registry):
         usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
@@ -385,7 +393,7 @@ def render_index_html(host: str, registry: Path) -> str:
     <code class="cmd" id="sh-cmd">{sh_cmd}</code>
     <div class="row">
       <button onclick="copyEl('sh-cmd', this)">Copy command</button>
-      <button class="ghost" onclick="copyFetch('/config.sh', this)">Copy payload</button>
+      <button class="ghost" onclick="copyFetch('/config.sh?memory='+memParam(), this)">Copy payload</button>
     </div>
   </div>
 
@@ -394,8 +402,18 @@ def render_index_html(host: str, registry: Path) -> str:
     <code class="cmd" id="ps-cmd">{ps_cmd}</code>
     <div class="row">
       <button onclick="copyEl('ps-cmd', this)">Copy command</button>
-      <button class="ghost" onclick="copyFetch('/config.ps1', this)">Copy payload</button>
+      <button class="ghost" onclick="copyFetch('/config.ps1?memory='+memParam(), this)">Copy payload</button>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Global memory</h2>
+    <label style="display:flex; gap:8px; align-items:center; font-weight:600;">
+      <input type="checkbox" id="global-memory" checked> configure global memory
+    </label>
+    <p class="note">Checked: the payload sets <code>memory.backend = hindsight</code> pointed at
+       <code>{memory_url}</code>. Unchecked: it sets <code>memory.backend = off</code>, so the
+       box is unconfigured from using memory.</p>
   </div>
 
   <div class="card">
@@ -434,6 +452,18 @@ async function copyFetch(path, btn) {{
   const r = await fetch(path);
   copyText(await r.text(), btn);
 }}
+function memParam() {{
+  return document.getElementById('global-memory').checked ? 'on' : 'off';
+}}
+function refreshCommands() {{
+  const HOST = "{host}";
+  document.getElementById('sh-cmd').textContent =
+    'curl -fsSL http://' + HOST + '/config.sh?memory=' + memParam() + ' | sh';
+  document.getElementById('ps-cmd').textContent =
+    'irm http://' + HOST + '/config.ps1?memory=' + memParam() + ' | iex';
+}}
+document.getElementById('global-memory').addEventListener('change', refreshCommands);
+refreshCommands();
 </script>
 </body>
 </html>
@@ -488,19 +518,25 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
 
         def do_GET(self) -> None:  # stdlib naming convention
             host = self.headers.get("Host", "localhost")
-            if self.path == "/config.sh":
+            parsed = urllib.parse.urlsplit(self.path)
+            memory = (
+                "off"
+                if urllib.parse.parse_qs(parsed.query).get("memory") == ["off"]
+                else "on"
+            )
+            if parsed.path == "/config.sh":
                 self._send(
                     200,
-                    render_config(registry, "bash", backend),
+                    render_config(registry, "bash", backend, memory),
                     "text/x-shellscript; charset=utf-8",
                 )
-            elif self.path == "/config.ps1":
+            elif parsed.path == "/config.ps1":
                 self._send(
                     200,
-                    render_config(registry, "powershell", backend),
+                    render_config(registry, "powershell", backend, memory),
                     "text/plain; charset=utf-8",
                 )
-            elif self.path == "/":
+            elif parsed.path == "/":
                 self._send(
                     200, render_index_html(host, registry), "text/html; charset=utf-8"
                 )

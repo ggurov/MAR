@@ -166,6 +166,11 @@ refresh; export warns when a token is already dead or dying. Skip notes
 (providers without env routes, e.g. antigravity → `/login google-antigravity`)
 print to stderr, never into the block.
 
+Memory is wired to the collective's Hindsight server: the block pins
+`memory.backend` = `hindsight` and `hindsight.apiUrl` = `http://hub.nj02.gurov.us:8888`.
+Uncheck "configure global memory" in the web UI — or pass `mar export --memory off` — and the
+block pins `memory.backend` = `off` instead, unconfiguring the box from using memory.
+
 PowerShell JSON-valued config lines come in a version branch: 5.1-7.2 use the
 `--%` stop-parsing token (legacy native-argument passing strips embedded
 quotes), while 7.3+ uses the plain string form (it re-escapes arguments even
@@ -187,7 +192,7 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar limits [provider]` | Real API checks (OpenRouter credits, Gemini key-liveness); exact pointers elsewhere |
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt OAuth logins (Claude, Codex) from local omp into the registry |
-| `mar export [--shell bash] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
+| `mar export [--shell bash] [--memory on\|off] [--memory-url URL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--memory off` writes `memory.backend off` |
 | `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request — ops (Windows task, auto-restart, logs, re-register): [docs/serve-operations.md](docs/serve-operations.md) |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar rotate <provider> --key-stdin` | Replace one provider's key in place — models, default model, and notes are preserved |

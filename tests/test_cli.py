@@ -606,6 +606,44 @@ class TestPull:
         assert run(reg_path, "pull", "--agent-dir", str(empty)) == 1
 
 
+class TestExportMemory:
+    def test_export_global_memory_defaults_to_hindsight(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        captured = capsys.readouterr()
+        assert "omp config set memory.backend hindsight" in captured.out
+        assert (
+            "omp config set hindsight.apiUrl http://hub.nj02.gurov.us:8888"
+            in captured.out
+        )
+        assert "global memory" in captured.err
+
+    def test_export_memory_off_emits_no_memory(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash", "--memory", "off") == 0
+        captured = capsys.readouterr()
+        assert "omp config set memory.backend off" in captured.out
+        assert "hindsight" not in captured.out
+
+    def test_export_memory_url_override(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert (
+            run(
+                reg_path,
+                "export",
+                "--shell",
+                "bash",
+                "--memory-url",
+                "http://mem.example:9999",
+            )
+            == 0
+        )
+        assert "hindsight.apiUrl http://mem.example:9999" in capsys.readouterr().out
+
+
 class TestExportOauth:
     def test_export_includes_oauth_tokens_with_warning(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
