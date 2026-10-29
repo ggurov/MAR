@@ -170,6 +170,8 @@ Memory is wired to the collective's Hindsight server: the block pins
 `memory.backend` = `hindsight` and `hindsight.apiUrl` = `http://hub.nj02.gurov.us:8888`.
 Uncheck "configure global memory" in the web UI — or pass `mar export --memory off` — and the
 block pins `memory.backend` = `off` instead, unconfiguring the box from using memory.
+The Global memory card also links to the Hindsight dashboard at
+`http://hub.nj02.gurov.us:9999/dashboard`.
 
 PowerShell JSON-valued config lines come in a version branch: 5.1-7.2 use the
 `--%` stop-parsing token (legacy native-argument passing strips embedded

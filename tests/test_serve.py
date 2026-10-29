@@ -532,6 +532,12 @@ class TestIndexHtml:
         assert "http://localhost:8930/config.sh?memory=on | sh" in html
         assert 'id="global-memory"' in html
         assert "configure global memory" in html
+        assert (
+            '<a href="http://hub.nj02.gurov.us:9999/dashboard" target="_blank"'
+            ' rel="noopener">Open Hindsight dashboard</a>' in html
+        )
+        memory_card = html.split("<h2>Global memory</h2>", 1)[1].split("</div>", 1)[0]
+        assert "Open Hindsight dashboard" in memory_card
         assert "config.ps1" in html
         assert "navigator.clipboard" in body_guard(html)  # secure-context copy path
         assert "execCommand" in html  # non-secure-context fallback
@@ -627,3 +633,107 @@ class TestHttpServer:
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             self._get(f"{server}/nope")
         assert excinfo.value.code == 404
+
+
+class TestServeCaching:
+    def test_stale_omp_usage_serves_stale_and_refreshes(self, monkeypatch):
+        monkeypatch.setattr(serve, "_omp_refresh_lock", threading.Lock())
+        monkeypatch.setattr(
+            serve, "_omp_cache", {"ts": time.monotonic() - 1000, "data": {"old": []}}
+        )
+        refreshed = threading.Event()
+        calls = []
+
+        def fake():
+            calls.append(1)
+            refreshed.set()
+            return {"reports": [{"provider": "zai", "limits": [{"id": "zai:5h"}]}]}
+
+        monkeypatch.setattr(serve, "_run_omp_usage", fake)
+        assert serve._omp_usage() == {"old": []}  # stale data, no wait
+        assert refreshed.wait(2)
+        deadline = time.monotonic() + 2
+        while serve._omp_cache.get("data") == {"old": []} and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serve._omp_cache["data"] == {"zai": [{"id": "zai:5h"}]}
+        assert calls == [1]
+
+    def test_cold_omp_usage_returns_empty_while_refresh_runs(self, monkeypatch):
+        monkeypatch.setattr(serve, "_omp_refresh_lock", threading.Lock())
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def fake():
+            calls.append(1)
+            started.set()
+            release.wait(2)
+            return {"reports": []}
+
+        monkeypatch.setattr(serve, "_run_omp_usage", fake)
+        thread = serve._refresh_omp_usage_async()
+        assert thread is not None
+        assert started.wait(2)
+        assert serve._omp_usage() == {}  # refresh in flight: never block the page
+        release.set()
+        thread.join(2)
+        assert calls == [1]
+
+    def test_stale_usage_cell_serves_stale_and_refreshes(self, monkeypatch):
+        monkeypatch.setattr(serve, "_usage_locks", {})
+        monkeypatch.setattr(
+            serve, "_usage_cache", {"openrouter": (time.monotonic() - 1000, "$1.00 left")}
+        )
+        refreshed = threading.Event()
+        calls = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append(provider_id)
+            refreshed.set()
+            return limits.LimitSnapshot(
+                provider="openrouter",
+                fetched_at="2026-10-29T00:00:00+00:00",
+                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        assert serve._usage_cell("openrouter", "key") == "$1.00 left"  # stale, no wait
+        assert refreshed.wait(2)
+        deadline = time.monotonic() + 2
+        while serve._usage_cache["openrouter"][1] != "$315.00 left" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serve._usage_cache["openrouter"][1] == "$315.00 left"
+        assert calls == ["openrouter"]
+
+    def test_stale_usage_cell_refresh_is_single_flight(self, monkeypatch):
+        monkeypatch.setattr(serve, "_usage_locks", {})
+        monkeypatch.setattr(
+            serve, "_usage_cache", {"openrouter": (time.monotonic() - 1000, "$1.00 left")}
+        )
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append(provider_id)
+            started.set()
+            release.wait(2)
+            return limits.LimitSnapshot(
+                provider="openrouter",
+                fetched_at="2026-10-29T00:00:00+00:00",
+                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        assert serve._usage_cell("openrouter", "key") == "$1.00 left"
+        assert started.wait(2)
+        assert serve._usage_cell("openrouter", "key") == "$1.00 left"
+        release.set()
+        deadline = time.monotonic() + 2
+        while serve._usage_cache["openrouter"][1] != "$315.00 left" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serve._usage_cache["openrouter"][1] == "$315.00 left"
+        assert calls == ["openrouter"]

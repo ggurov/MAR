@@ -30,8 +30,11 @@ from pathlib import Path
 from mar import cli, limits, providers
 
 REPO_URL = "https://github.com/ggurov/MAR"
+HINDSIGHT_DASHBOARD_URL = "http://hub.nj02.gurov.us:9999/dashboard"
 _USAGE_TTL_SECONDS = 60.0
 _usage_cache: dict[str, tuple[float, str]] = {}
+_usage_locks: dict[str, threading.Lock] = {}
+_usage_locks_guard = threading.Lock()
 
 
 def render_config(
@@ -73,41 +76,98 @@ def render_config(
     return "\n".join(lines).strip("\n")
 
 
+def _provider_usage_lock(provider: str) -> threading.Lock:
+    """Return the per-provider lock guarding one live usage fetch."""
+    with _usage_locks_guard:
+        return _usage_locks.setdefault(provider, threading.Lock())
+
+
+def _fetch_usage_cell(provider: str, key: str | None) -> str:
+    """Fetch one provider's live quota cell.
+
+    Raises:
+        Exception: Any fetch/parse failure (callers decide the fallback).
+    """
+    snapshot = limits.fetch(provider, key or "", timeout=5.0)
+    item = snapshot.items[0]
+    if item.limit is not None:
+        return f"${item.limit - (item.used or 0):.2f} left"
+    return f"${item.used or 0:.2f} used"
+
+
+def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | None:
+    """Refresh one provider's quota cell in the background, single-flight.
+
+    Returns:
+        The started thread, or ``None`` when a refresh is already running.
+    """
+    lock = _provider_usage_lock(provider)
+    if not lock.acquire(blocking=False):
+        return None
+    cache = _usage_cache
+    previous = cache.get(provider)
+
+    def worker() -> None:
+        try:
+            cell = _fetch_usage_cell(provider, key)
+        except Exception:  # noqa: BLE001 — keep the last good cell
+            cell = previous[1] if previous is not None else "unavailable"
+        finally:
+            cache[provider] = (time.monotonic(), cell)
+            lock.release()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
 def _usage_cell(provider: str, key: str | None) -> str | None:
-    """Return the quota text for one provider, caching live fetches.
+    """Return the quota text for one provider, cached and non-blocking.
 
     Only OpenRouter has a shipped fetcher; every other provider yields
     ``None`` here and relies on the usage-page link instead.
+
+    A fresh cache entry is returned directly. A stale entry is returned
+    immediately while a single background refresh runs, so rendering the
+    page never waits on a provider API. Only the first call for a provider
+    fetches synchronously; if another refresh already holds the provider
+    lock, ``None`` is returned so the page still renders fast.
 
     Args:
         provider: Catalog id.
         key: The provider credential used for the live fetch.
 
     Returns:
-        Human quota text, e.g. ``"$315.00 left"``; ``None``
-        when the provider has no live fetcher. Fetch failures degrade to
-        ``"unavailable"``.
+        Human quota text, e.g. ``"$315.00 left"``; ``None`` when the
+        provider has no live fetcher or a refresh is already in flight.
+        Fetch failures degrade to ``"unavailable"`` (or keep the last
+        good cell when refreshing in the background).
     """
     if provider != "openrouter":
         return None
+    now = time.monotonic()
     cached = _usage_cache.get(provider)
-    if cached is not None and time.monotonic() - cached[0] < _USAGE_TTL_SECONDS:
+    if cached is not None and now - cached[0] < _USAGE_TTL_SECONDS:
         return cached[1]
+    if cached is not None:
+        _refresh_usage_async(provider, key)
+        return cached[1]
+    lock = _provider_usage_lock(provider)
+    if not lock.acquire(blocking=False):
+        return None
     try:
-        snapshot = limits.fetch(provider, key or "", timeout=5.0)
-        item = snapshot.items[0]
-        if item.limit is not None:
-            cell = f"${item.limit - (item.used or 0):.2f} left"
-        else:
-            cell = f"${item.used or 0:.2f} used"
+        cell = _fetch_usage_cell(provider, key)
     except Exception:  # noqa: BLE001 — a dead usage API must never 500 the page
         cell = "unavailable"
-    _usage_cache[provider] = (time.monotonic(), cell)
+    finally:
+        _usage_cache[provider] = (time.monotonic(), cell)
+        lock.release()
     return cell
 
 
 _OMP_TTL_SECONDS = 300.0
 _omp_cache: dict = {}
+_omp_refresh_lock = threading.Lock()
 
 
 def _run_omp_usage() -> dict:
@@ -131,25 +191,66 @@ def _run_omp_usage() -> dict:
     return json.loads(done.stdout)
 
 
+def _refresh_omp_usage_async() -> threading.Thread | None:
+    """Refresh ``omp usage`` in the background, single-flight.
+
+    Returns:
+        The started thread, or ``None`` when a refresh is already running.
+    """
+    if not _omp_refresh_lock.acquire(blocking=False):
+        return None
+    cache = _omp_cache
+
+    def worker() -> None:
+        reports: dict[str, list] | None = None
+        try:
+            data = _run_omp_usage()
+            reports = {r["provider"]: r.get("limits", []) for r in data.get("reports", [])}
+        except Exception:  # noqa: BLE001 — keep the last good snapshot
+            reports = None
+        finally:
+            cache["ts"] = time.monotonic()
+            if reports is not None:
+                cache["data"] = reports
+            _omp_refresh_lock.release()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
 def _omp_usage() -> dict[str, list]:
     """Return omp's usage reports, cached for :data:`_OMP_TTL_SECONDS`.
 
-    Stale data is served when a refresh fails — a dead CLI must never
-    break the page.
+    Fresh data is returned directly. Stale data is returned immediately
+    while a single background refresh runs, so a page render never waits
+    on ``omp usage``. With no cache at all the call fetches synchronously
+    unless another refresh is already in flight, in which case it returns
+    an empty mapping so the page still renders fast.
 
     Returns:
         Mapping of omp provider id to its ``limits`` list (possibly empty).
     """
     now = time.monotonic()
-    if _omp_cache.get("ts") is not None and now - _omp_cache["ts"] < _OMP_TTL_SECONDS:
-        return _omp_cache.get("data", {})
+    cache = _omp_cache
+    data = cache.get("data")
+    ts = cache.get("ts")
+    if data is not None and ts is not None and now - ts < _OMP_TTL_SECONDS:
+        return data
+    if data is not None:
+        _refresh_omp_usage_async()
+        return data
+    if not _omp_refresh_lock.acquire(blocking=False):
+        return {}
     try:
-        data = _run_omp_usage()
-        reports = {r["provider"]: r.get("limits", []) for r in data.get("reports", [])}
+        raw = _run_omp_usage()
+        reports = {r["provider"]: r.get("limits", []) for r in raw.get("reports", [])}
     except Exception:  # noqa: BLE001 — degrade to the last good snapshot
-        reports = _omp_cache.get("data", {})
-    _omp_cache["ts"] = now
-    _omp_cache["data"] = reports
+        reports = {}
+    finally:
+        cache["ts"] = time.monotonic()
+        cache["data"] = reports
+        _omp_refresh_lock.release()
     return reports
 
 
@@ -318,6 +419,10 @@ def render_index_html(host: str, registry: Path) -> str:
     sh_cmd = f"curl -fsSL http://{host}/config.sh?memory=on | sh"
     ps_cmd = f"irm http://{host}/config.ps1?memory=on | iex"
     memory_url = os.environ.get("MAR_MEMORY_URL") or cli.DEFAULT_GLOBAL_MEMORY_URL
+    dashboard_link = (
+        f'<a href="{HINDSIGHT_DASHBOARD_URL}" target="_blank"'
+        ' rel="noopener">Open Hindsight dashboard</a>'
+    )
     rows_html: list[str] = []
     for row in services_snapshot(registry):
         usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
@@ -414,6 +519,7 @@ def render_index_html(host: str, registry: Path) -> str:
     <p class="note">Checked: the payload sets <code>memory.backend = hindsight</code> pointed at
        <code>{memory_url}</code>. Unchecked: it sets <code>memory.backend = off</code>, so the
        box is unconfigured from using memory.</p>
+    <p class="note">{dashboard_link}</p>
   </div>
 
   <div class="card">
@@ -549,6 +655,18 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
     return Handler
 
 
+def _warm_caches(registry: Path) -> None:
+    """Populate the usage caches once at startup, best-effort.
+
+    Args:
+        registry: Path to the MAR registry file.
+    """
+    try:
+        services_snapshot(registry)
+    except Exception:  # noqa: BLE001 — warming must never break startup
+        return
+
+
 def serve(host: str, port: int, registry: Path, backend: str | None = None) -> None:
     """Run the config server until interrupted.
 
@@ -561,9 +679,9 @@ def serve(host: str, port: int, registry: Path, backend: str | None = None) -> N
     Raises:
         OSError: If the port cannot be bound.
     """
-    # Warm the omp usage cache in the background — the first page view
+    # Warm the usage caches in the background — the first page view
     # should not wait on a full provider sweep.
-    threading.Thread(target=_omp_usage, daemon=True).start()
+    threading.Thread(target=_warm_caches, args=(registry,), daemon=True).start()
     server = ThreadingHTTPServer((host, port), make_handler(registry, backend))
     try:
         server.serve_forever()
