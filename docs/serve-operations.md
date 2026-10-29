@@ -8,6 +8,9 @@ rights required anywhere.
 
 - `uv run mar serve --port 8930` — HTML status page + `/config.sh` /`/config.ps1`
   payloads, regenerated per request from the registry.
+- Usage data is cached (60 s for provider fetches, 300 s for `omp usage`) and
+  refreshed in the background; stale data is served immediately, so the page
+  stays responsive even when a provider API or `omp usage` is slow.
 - Windows Firewall rule `MAR config server`: TCP 8930 inbound, **LocalSubnet
   only**, Private+Domain profiles (created once with elevation; the rule itself
   never needs admin again).
