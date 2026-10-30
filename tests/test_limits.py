@@ -65,9 +65,79 @@ def raises_open(exc: Exception):
 def test_supported_lists_api_kind_ids_in_catalog_order():
     from mar.providers import CATALOG
 
-    assert supported() == ["openrouter", "gemini"]
+    assert supported() == ["openrouter", "gemini", "strata"]
     assert supported() == [p.id for p in CATALOG if p.limits_kind == "api"]
 
+STRATA_URL = "http://192.168.1.242:9931/v1"
+STRATA_MODEL = "qwen3.8-flash-next-abliterated-iq3_s"
+
+
+def _strata_model(model_id: str = STRATA_MODEL, ctx: int = 131072) -> dict:
+    return {
+        "id": model_id,
+        "object": "model",
+        "status": {"value": "loaded"},
+        "meta": {"n_ctx": ctx},
+        "architecture": {
+            "input_modalities": ["text", "image"],
+            "output_modalities": ["text"],
+        },
+    }
+
+
+# ------------------------------------------------------ strata (local engine)
+
+
+def test_fetch_strata_probes_the_catalog_endpoint_without_a_key(monkeypatch):
+    captured = {}
+
+    def fake_open(request, timeout):
+        captured["url"] = request.full_url
+        captured["auth"] = request.get_header("Authorization")
+        captured["timeout"] = timeout
+        return FakeResponse(json.dumps({"data": [_strata_model()]}).encode())
+
+    monkeypatch.setattr(limits, "_open", fake_open)
+    snapshot = fetch("strata", "", timeout=4.0)
+
+    assert captured["url"] == f"{STRATA_URL}/models"
+    assert captured["auth"] is None
+    assert captured["timeout"] == 4.0
+    assert snapshot.provider == "strata"
+    assert snapshot.source == "api"
+    assert snapshot.items == ()
+    assert snapshot.note == f"up: 1 model \u00b7 {STRATA_MODEL} \u00b7 131072 ctx \u00b7 text+image"
+
+
+def test_fetch_strata_counts_every_served_model(monkeypatch):
+    payload = {"data": [_strata_model(), _strata_model("second-model", ctx=8192)]}
+    monkeypatch.setattr(limits, "_open", _payload(payload))
+    assert fetch("strata", "").note.startswith("up: 2 models \u00b7 ")
+
+
+STRATA_ERROR_CASES = [
+    pytest.param({"object": "list"}, "missing the 'data' list", id="missing-data"),
+    pytest.param({"data": []}, "no loaded model", id="empty-data"),
+    pytest.param({"data": [{"object": "model"}]}, "no loaded model", id="entry-without-id"),
+]
+
+
+@pytest.mark.parametrize(("payload", "expected"), STRATA_ERROR_CASES)
+def test_fetch_strata_error_paths(monkeypatch, payload, expected):
+    monkeypatch.setattr(limits, "_open", _payload(payload))
+    with pytest.raises(LimitError) as excinfo:
+        fetch("strata", "")
+    assert expected in str(excinfo.value)
+
+
+def test_fetch_strata_http_error_names_the_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        limits, "_open", raises_open(urllib.error.URLError("connection refused"))
+    )
+    with pytest.raises(LimitError) as excinfo:
+        fetch("strata", "")
+    assert "strata models API" in str(excinfo.value)
+    assert "connection refused" in str(excinfo.value)
 
 # ---------------------------------------------------------------- gemini fetcher()
 
@@ -121,13 +191,25 @@ def test_fetch_gemini_http_error_names_gemini(monkeypatch):
 # ------------------------------------------------------------- manual_hint()
 
 
-@pytest.mark.parametrize("provider", CATALOG, ids=lambda p: p.id)
+@pytest.mark.parametrize(
+    "provider",
+    [p for p in CATALOG if p.limits_url],
+    ids=lambda p: p.id,
+)
 def test_manual_hint_is_two_lines_with_url_then_instruction(provider):
     hint = manual_hint(provider.id)
     lines = hint.splitlines()
     assert len(lines) == 2
     assert lines[0] == provider.limits_url
     assert "open this page and check usage manually" in lines[1].lower()
+
+
+def test_manual_hint_for_self_hosted_entry_points_at_its_endpoint():
+    hint = manual_hint("strata")
+    lines = hint.splitlines()
+    assert len(lines) == 2
+    assert lines[0] == STRATA_URL
+    assert "mar limits strata" in lines[1]
 
 
 def test_manual_hint_openrouter_carries_catalog_page_url():

@@ -1,9 +1,9 @@
 """Tests for the static provider catalog (M2).
 
-The catalog must mirror docs/providers.md exactly: 9 providers, fixed order,
-verification flags confirmed against omp's provider roster on 2026-10-10.
-Validation rules are exercised by tampering with copies of catalog entries
-(the shipped CATALOG is frozen).
+The catalog must mirror docs/providers.md exactly: 13 providers, fixed order,
+verification flags confirmed against omp's provider roster (2026-10-10) and a
+live LAN llama.cpp probe (2026-10-23). Validation rules are exercised by
+tampering with copies of catalog entries (the shipped CATALOG is frozen).
 """
 
 import dataclasses
@@ -25,6 +25,7 @@ EXPECTED_IDS = (
     "jev",
     "gemini",
     "commandcode",
+    "strata",
 )
 
 UNVERIFIED_IDS: set[str] = set()
@@ -41,6 +42,7 @@ OMP_IDS = {
     "openrouter": "openrouter",
     "antigravity": "google-antigravity",
     "copilot": "github-copilot",
+    "strata": "llama.cpp",
 }
 
 ENV_VARS = {
@@ -56,6 +58,7 @@ ENV_VARS = {
     "jev": "TYPESAFE_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "commandcode": "COMMAND_CODE_API_KEY",
+    "strata": "",
 }
 
 OAUTH_ENV_VARS = {
@@ -71,6 +74,7 @@ OAUTH_ENV_VARS = {
     "jev": "",
     "gemini": "",
     "commandcode": "",
+    "strata": "",
 }
 
 EXPORT_KEY_ENV_VARS = {
@@ -86,15 +90,22 @@ EXPORT_KEY_ENV_VARS = {
     "jev": "TYPESAFE_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "commandcode": "COMMAND_CODE_API_KEY",
+    "strata": "",
 }
 
 URL_FIELDS = ("key_url", "limits_url", "signup_url")
+
+# Self-hosted endpoints are plain HTTP on the LAN: (base_url, env route).
+BASE_URLS = {"strata": ("http://192.168.1.242:9931/v1", "LLAMA_CPP_BASE_URL")}
+
+AUTH_METHODS = {pid: ("api_key",) for pid in EXPECTED_IDS}
+AUTH_METHODS["strata"] = ("none",)
 
 
 def test_ids_returns_exact_catalog_in_order():
     assert ids() == EXPECTED_IDS
     assert tuple(p.id for p in CATALOG) == EXPECTED_IDS
-    assert len(CATALOG) == 12
+    assert len(CATALOG) == 13
 
 
 def test_get_returns_matching_provider():
@@ -118,7 +129,7 @@ def test_get_unknown_id_raises_key_error_listing_valid_ids():
 def test_every_url_field_is_https(provider):
     for field in URL_FIELDS:
         url = getattr(provider, field)
-        assert url.startswith("https://"), f"{provider.id}.{field} = {url!r}"
+        assert not url or url.startswith("https://"), f"{provider.id}.{field} = {url!r}"
 
 
 def test_validate_shipped_catalog_is_healthy():
@@ -130,7 +141,7 @@ def test_unverified_is_empty_every_entry_confirmed():
     assert all(p.verified for p in CATALOG)
 
 
-def test_verified_are_all_twelve_roster_confirmed_providers():
+def test_verified_are_all_thirteen_confirmed_providers():
     assert {p.id for p in CATALOG if p.verified} == VERIFIED_IDS
 
 
@@ -156,15 +167,35 @@ def test_export_key_env_vars_match_official_roster(provider_id, env_var):
 
 def test_limits_kind_api_providers_are_openrouter_and_gemini():
     api_providers = [p for p in CATALOG if p.limits_kind == "api"]
-    assert [p.id for p in api_providers] == ["openrouter", "gemini"]
+    assert [p.id for p in api_providers] == ["openrouter", "gemini", "strata"]
     manual = [p.id for p in CATALOG if p.limits_kind == "manual"]
     assert "gemini" not in manual
 
 
 @pytest.mark.parametrize("provider", CATALOG, ids=lambda p: p.id)
 def test_v1_defaults(provider):
-    assert provider.auth_methods == ("api_key",)
+    assert provider.auth_methods == AUTH_METHODS[provider.id]
     assert provider.default_model is None
+
+
+@pytest.mark.parametrize(("provider_id", "base_url"), sorted(BASE_URLS.items()))
+def test_local_endpoint_base_urls_and_env_routes(provider_id, base_url):
+    provider = get(provider_id)
+    assert (provider.base_url, provider.omp_base_url_env_var) == base_url
+
+
+def test_only_the_self_hosted_entry_carries_a_base_url():
+    assert [p.id for p in CATALOG if p.base_url] == ["strata"]
+
+
+def test_strata_is_keyless_with_no_web_pages():
+    strata = get("strata")
+    assert strata.auth_methods == ("none",)
+    assert strata.verified is True
+    assert strata.omp_provider_id == "llama.cpp"
+    assert strata.limits_kind == "api"
+    assert (strata.key_url, strata.limits_url, strata.signup_url) == ("", "", "")
+    assert strata.export_env_var == "" and strata.omp_env_var == ""
 
 
 BASE = CATALOG[0]
@@ -209,6 +240,21 @@ TAMPER_CASES = [
         dataclasses.replace(BASE, omp_env_var="not an env var"),
         "omp_env_var 'not an env var' does not match",
         id="bad-env-var-shape",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, base_url="ftp://192.168.1.242:9931/v1"),
+        "base_url must start with http:// or https://",
+        id="bad-base-url-scheme",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, base_url="http://192.168.1.242:9931/v1"),
+        "base_url requires omp_base_url_env_var",
+        id="base-url-without-env-route",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, omp_base_url_env_var="llama_cpp_base_url"),
+        "omp_base_url_env_var 'llama_cpp_base_url' does not match",
+        id="bad-base-url-env-var-shape",
     ),
 ]
 

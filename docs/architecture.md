@@ -108,13 +108,29 @@ content. `bootstrap.sync` routes a provider to `.env` when its catalog entry
 has `omp_env_var` set, else to an `agent.db` login-style row (which ranks
 above env in omp's credential precedence).
 
+**verified** — omp's status line accepts only its fixed segment ids
+(`omp config set statusLine.leftSegments '["provider"]'` is rejected), and the
+built-in `model` segment renders `model.name` — the catalog display name, not
+the API id. The provider is not selectable at all. MAR therefore pins
+`statusLine` to `leftSegments = [vim, hostname, mode, path, git, pr]` (no
+`model`) and installs a dependency-free extension at
+`<agent_dir>/extensions/mar-statusline.js`. It runs on `session_start` /
+`session_switch`, polls `ctx.model` and `pi.getThinkingLevel()` for `/model`
+and effort changes, and calls `ctx.ui.setWidget("mar-model", [`<glyph>
+${provider}/${id}`], { placement: "aboveEditor" })`, where `<glyph>` is the
+compact first character of the theme's thinking-level label for models that
+expose levels (`off` uses the disabled symbol), else the theme's model icon.
+omp renders it on its own line above the composer band.
+The extension is rewritten on every sync/export, so it is MAR-owned.
+
 ## Provider catalog
 
-Ten entries, exactly the lines of the problem statement (see
-docs/providers.md for the data + verification status). Fields:
+Thirteen entries (see docs/providers.md for the data + verification status).
+Fields:
 
 `id, display, auth_methods, key_url, limits_url, signup_url, omp_provider_id,
-default_model, limits_kind, notes`
+omp_env_var, export_env_var, export_oauth_env_var, default_model,
+limits_kind, verified, notes, omp_base_url_env_var, base_url`
 
 - `limits_kind` ∈ {`api`, `manual`} — drives limits.py dispatch.
 - `omp_provider_id` is what MAR writes into `agent.db.provider`. Only ids
@@ -123,14 +139,32 @@ default_model, limits_kind, notes`
 - `validate()` returns a list of problem strings; tests assert it is empty for
   the shipped catalog.
 
+**verified 2026-10-23** — self-hosted engine route. `strata` is a keyless
+llama.cpp server on the LAN (`http://192.168.1.242:9931/v1`). omp 18.12.6
+discovers that engine implicitly as provider id `llama.cpp`, reading the
+endpoint from `LLAMA_CPP_BASE_URL` (agent `.env` works; verified live) and
+speaking the Responses API (`POST /v1/responses` answers; the server also
+serves `POST /v1/chat/completions`, `GET /v1/models`, `GET /props`, `GET
+/slots`; tool calls complete end to end). MAR therefore stores a subscription
+with `auth_method="none"`, writes no credential, and puts
+`LLAMA_CPP_BASE_URL=<base_url>` in `.env` on sync/export. The omp model
+reference is `llama.cpp/<model id>`; omp's discovery fills context window
+(`meta.n_ctx` = 131072) and input modalities from the server, and
+`mar limits strata` probes `{base_url}/models` (a LAN endpoint, not a web
+page — the one fetcher that talks plain `http://` by design).
+
 ## Limits
 
 - `limits_kind == "api"` → real fetcher. Shipped: OpenRouter
   `GET https://openrouter.ai/api/v1/credits` with `Authorization: Bearer <key>`
-  (documented public API). Tests mock HTTP (monkeypatched
+  (documented public API), Gemini's models list (key liveness), and the
+  self-hosted `strata` engine's `GET {base_url}/models` (loaded model, context
+  window, input modalities). Tests mock HTTP (monkeypatched
   `urllib.request.urlopen`); no unit test hits the network.
 - `limits_kind == "manual"` → `manual_hint()` returns provider's `limits_url`
-  + one-line instruction. Honest UX: MAR says what it cannot fetch and why.
+  + one-line instruction; a self-hosted entry that has only a `base_url` names
+  its endpoint and the `mar limits <id>` probe instead. Honest UX: MAR says
+  what it cannot fetch and why.
 - `LimitSnapshot.source` ∈ {`api`, `manual`} so the CLI can label output.
 
 ## Bootstrap prompt
@@ -138,7 +172,9 @@ default_model, limits_kind, notes`
 `render_prompt(registry)` produces markdown for pasting into a fresh omp
 session. It must:
 
-- list every active subscription with provider id + default model (no keys),
+- list every active subscription with provider id + default model (no keys);
+  a self-hosted entry also carries `endpoint: <base_url>` and the omp model
+  reference (`llama.cpp/<model id>`), so the line is copy-pasteable,
 - instruct omp to run `mar omp-sync` (keys reach omp through MAR, not the
   prompt),
 - append the contents of `~/.mar/prompt.md` (custom follow-up) when present,
@@ -177,6 +213,12 @@ with `credential_type = 'oauth'` and JSON payload
   `provider` → catalog id via `omp_provider_id`, and upserts registry subs
   with `auth_method="oauth"`, `key=access`, notes carrying account + expiry.
   Refresh tokens stay in omp's store — they are never copied into MAR.
+- `mar pull` also reads `<agent_dir>/.env` (`omp.read_env_credentials`),
+  omp's environment fallback. On env-configured installs `agent.db` holds
+  no rows at all, so this is the only credential source. Catalog env vars
+  map back to providers (`omp_env_var` / `export_env_var` → `api_key`,
+  `export_oauth_env_var` → `oauth`); `agent.db` OAuth rows win because
+  they carry refresh metadata.
 - `mar export` emits OAuth subs as `export_oauth_env_var` lines:
   `ANTHROPIC_OAUTH_TOKEN`, `OPENAI_CODEX_OAUTH_TOKEN` (documented omp env
   routes). omp on the target machine reads them from `.env` but CANNOT

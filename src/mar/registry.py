@@ -21,7 +21,7 @@ from mar import store as mar_store
 from mar.store import FileStore, Store
 
 SCHEMA_VERSION = 1
-VALID_AUTH_METHODS = frozenset({"api_key", "oauth"})
+VALID_AUTH_METHODS = frozenset({"api_key", "oauth", "none"})
 VALID_STATUSES = frozenset({"active", "expired", "disabled"})
 
 _SUBSCRIPTION_FIELDS = (
@@ -47,8 +47,10 @@ class Subscription:
 
     Attributes:
         provider: Nonempty provider id (catalog cross-check happens upstream).
-        auth_method: ``"api_key"`` or ``"oauth"``.
-        key: Secret key; required (nonempty) iff ``auth_method == "api_key"``.
+        auth_method: ``"api_key"``, ``"oauth"``, or ``"none"`` (keyless
+            self-hosted endpoint).
+        key: Secret key; required (nonempty) iff ``auth_method ==
+            "api_key"``, and forbidden for ``"none"``.
         models: Model ids available under this subscription.
         default_model: Model used by default; when set it must be in ``models``.
         added_at: ISO-8601 timestamp of when the subscription was added.
@@ -92,7 +94,8 @@ def _validate(sub: Subscription) -> None:
     Raises:
         RegistryError: On an empty/blank/non-str provider, unknown
             auth_method or status, a missing key when auth_method is
-            ``api_key``, or a default_model outside ``models``.
+            ``api_key``, a key on the keyless ``none`` method, or a
+            default_model outside ``models``.
     """
     if not isinstance(sub.provider, str) or not sub.provider.strip():
         raise RegistryError("provider must be a nonempty string")
@@ -108,6 +111,11 @@ def _validate(sub: Subscription) -> None:
         )
     if sub.auth_method == "api_key" and not sub.key:
         raise RegistryError(f"provider {sub.provider!r} uses auth_method 'api_key' but has no key")
+    if sub.auth_method == "none" and sub.key:
+        raise RegistryError(
+            f"provider {sub.provider!r} uses auth_method 'none' (keyless) "
+            "but carries a key"
+        )
     if sub.default_model is not None and sub.default_model not in sub.models:
         raise RegistryError(
             f"default_model {sub.default_model!r} for provider "

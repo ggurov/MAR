@@ -39,6 +39,8 @@ class TestRenderConfig:
         assert "omp config set edit.mode hashline" in body
         assert "PI_STRICT_EDIT_MODE=1" in body
         assert "omp config set composer.tokenRate true" in body
+        assert "omp config set memory.backend hindsight" in body
+        assert f"omp config set hindsight.apiUrl {cli.DEFAULT_GLOBAL_MEMORY_URL}" in body
         assert "BEGIN" not in body
         assert "END" not in body
 
@@ -483,6 +485,46 @@ class TestServicesSnapshot:
         )
         assert row["usage"] == "unavailable"
 
+    def test_keyless_local_endpoint_row_shows_endpoint_state(
+        self, registry_path, monkeypatch
+    ):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "strata",
+                "auth_method": "none",
+                "key": None,
+                "models": ["qwen3.8-flash-next-abliterated-iq3_s"],
+                "default_model": "qwen3.8-flash-next-abliterated-iq3_s",
+                "added_at": "2026-10-23T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+            },
+        )
+        calls = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append((provider_id, key))
+            return limits.LimitSnapshot(
+                provider="strata",
+                fetched_at="2026-10-23T00:00:00+00:00",
+                items=(),
+                source="api",
+                note="up: 1 model \u00b7 qwen3.8-flash-next-abliterated-iq3_s",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        row = next(
+            r for r in serve.services_snapshot(registry_path) if r["provider"] == "strata"
+        )
+        assert ("strata", "") in calls
+        assert row["usage"] == "up: 1 model \u00b7 qwen3.8-flash-next-abliterated-iq3_s"
+        assert row["endpoint"] == "http://192.168.1.242:9931/v1"
+        assert row["limits_url"] == ""
+
 
 class TestIndexHtml:
     def test_page_has_copy_buttons_repo_and_services(self, registry_path, monkeypatch):
@@ -557,6 +599,36 @@ class TestIndexHtml:
         assert "omp /login" not in html  # old generic hint is gone
         assert "mar pull" in html  # renewal-flow note under the table
 
+    def test_page_links_self_hosted_endpoint_when_no_usage_page_exists(
+        self, registry_path, monkeypatch
+    ):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "strata",
+                "auth_method": "none",
+                "key": None,
+                "models": ["qwen3.8-flash-next-abliterated-iq3_s"],
+                "default_model": "qwen3.8-flash-next-abliterated-iq3_s",
+                "added_at": "2026-10-23T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+            },
+        )
+
+        def boom(provider_id, key, **kwargs):
+            raise limits.LimitError("down")
+
+        monkeypatch.setattr(serve.limits, "fetch", boom)
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        html = serve.render_index_html("localhost:8930", registry_path)
+        assert (
+            '<a href="http://192.168.1.242:9931/v1" target="_blank"'
+            ' rel="noopener"><b>strata</b></a>' in html
+        )
+
 
 def body_guard(html: str) -> str:
     return html
@@ -596,17 +668,11 @@ class TestHttpServer:
         assert status == 200
         assert "Set-Content" in body
 
-    def test_index_is_html_with_copy_and_repo_links(self, server):
-        status, body = self._get(f"{server}/")
+    def test_config_ps1_memory_off(self, server):
+        status, body = self._get(f"{server}/config.ps1?memory=off")
         assert status == 200
-        assert "<!doctype html>" in body.lower()
-        assert "text/html" in self._content_type(f"{server}/")
-        host = server.split("//")[1]
-        assert f"http://{host}/config.sh?memory=on | sh" in body
-        assert 'id="global-memory"' in body
-        assert "github.com/ggurov/MAR" in body
-        assert "navigator.clipboard" in body  # secure-context copy path
-        assert "execCommand" in body  # non-secure-context fallback
+        assert "omp config set memory.backend off" in body
+        assert "hindsight" not in body
 
     def test_config_sh_memory_on_by_default(self, server):
         _, body = self._get(f"{server}/config.sh")
@@ -619,11 +685,17 @@ class TestHttpServer:
         assert "omp config set memory.backend off" in body
         assert "hindsight" not in body
 
-    def test_config_ps1_memory_off(self, server):
-        status, body = self._get(f"{server}/config.ps1?memory=off")
+    def test_index_is_html_with_copy_and_repo_links(self, server):
+        status, body = self._get(f"{server}/")
         assert status == 200
-        assert "omp config set memory.backend off" in body
-        assert "hindsight" not in body
+        assert "<!doctype html>" in body.lower()
+        assert "text/html" in self._content_type(f"{server}/")
+        host = server.split("//")[1]
+        assert f"http://{host}/config.sh?memory=on | sh" in body
+        assert 'id="global-memory"' in body
+        assert "github.com/ggurov/MAR" in body
+        assert "navigator.clipboard" in body  # secure-context copy path
+        assert "execCommand" in body  # non-secure-context fallback
 
     def _content_type(self, url):
         with urllib.request.urlopen(url, timeout=5) as resp:

@@ -89,10 +89,12 @@ def _fetch_usage_cell(provider: str, key: str | None) -> str:
         Exception: Any fetch/parse failure (callers decide the fallback).
     """
     snapshot = limits.fetch(provider, key or "", timeout=5.0)
-    item = snapshot.items[0]
-    if item.limit is not None:
-        return f"${item.limit - (item.used or 0):.2f} left"
-    return f"${item.used or 0:.2f} used"
+    if snapshot.items:
+        item = snapshot.items[0]
+        if item.limit is not None:
+            return f"${item.limit - (item.used or 0):.2f} left"
+        return f"${item.used or 0:.2f} used"
+    return snapshot.note or "ok"
 
 
 def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | None:
@@ -122,10 +124,12 @@ def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | N
 
 
 def _usage_cell(provider: str, key: str | None) -> str | None:
-    """Return the quota text for one provider, cached and non-blocking.
+    """Return the live quota text for one provider, cached and non-blocking.
 
-    Only OpenRouter has a shipped fetcher; every other provider yields
-    ``None`` here and relies on the usage-page link instead.
+    Every ``limits_kind == "api"`` catalog entry is fetched: OpenRouter
+    reports credits (rendered as dollars), Gemini reports key liveness, and
+    the self-hosted ``strata`` engine reports its loaded model — for
+    fetchers without numeric items the snapshot's own ``note`` is the cell.
 
     A fresh cache entry is returned directly. A stale entry is returned
     immediately while a single background refresh runs, so rendering the
@@ -135,7 +139,8 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
 
     Args:
         provider: Catalog id.
-        key: The provider credential used for the live fetch.
+        key: The provider credential used for the live fetch (unused by
+            keyless endpoints).
 
     Returns:
         Human quota text, e.g. ``"$315.00 left"``; ``None`` when the
@@ -143,7 +148,11 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
         Fetch failures degrade to ``"unavailable"`` (or keep the last
         good cell when refreshing in the background).
     """
-    if provider != "openrouter":
+    try:
+        entry = providers.get(provider)
+    except KeyError:
+        return None
+    if entry.limits_kind != "api":
         return None
     now = time.monotonic()
     cached = _usage_cache.get(provider)
@@ -366,12 +375,14 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     Returns:
         One dict per active subscription with keys ``provider``,
         ``auth``, ``usage`` (quota text from ``omp usage`` windows —
-        each window carries its own ``resets in X`` countdown — or the
-        OpenRouter credits fetch; ``None`` when a provider reports
-        neither), ``renew`` (oauth token expiry only: ``in 7.9h`` under
-        48 hours, ``in ~N days`` under a year, ``""`` for longer-lived
-        tokens, ``EXPIRED`` once past; empty string when nothing
-        expires), and ``limits_url``.
+        each window carries its own ``resets in X`` countdown — else the
+        live fetch for any ``limits_kind == "api"`` catalog entry, which
+        for a self-hosted endpoint reports its loaded model; ``None`` when
+        a provider reports neither), ``renew`` (oauth token expiry only:
+        ``in 7.9h`` under 48 hours, ``in ~N days`` under a year, ``""``
+        for longer-lived tokens, ``EXPIRED`` once past; empty string when
+        nothing expires), ``limits_url``, and ``endpoint`` (the catalog
+        ``base_url`` for a self-hosted entry, else ``""``).
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -379,12 +390,13 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     usage_map = _omp_usage()
     for sub in reg.active():
         try:
-            limits_url = providers.get(sub.provider).limits_url
+            entry = providers.get(sub.provider)
         except KeyError:
-            limits_url = ""
+            entry = None
+        limits_url = entry.limits_url if entry else ""
         omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
         quota, _ = _format_limits(omp_limits)
-        if quota is None and sub.provider == "openrouter":
+        if quota is None:
             quota = _usage_cell(sub.provider, sub.key)
         if sub.auth_method == "oauth" and sub.expires_at_ms:
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
@@ -398,6 +410,7 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
                 "usage": quota,
                 "renew": renew,
                 "limits_url": limits_url,
+                "endpoint": entry.base_url if entry else "",
             }
         )
     return rows
@@ -427,9 +440,10 @@ def render_index_html(host: str, registry: Path) -> str:
     for row in services_snapshot(registry):
         usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
         name = html_mod.escape(row["provider"])
-        if row["limits_url"]:
+        link = row["limits_url"] or row["endpoint"]
+        if link:
             provider = (
-                f'<a href="{html_mod.escape(row["limits_url"])}" target="_blank"'
+                f'<a href="{html_mod.escape(link)}" target="_blank"'
                 f' rel="noopener"><b>{name}</b></a>'
             )
         else:

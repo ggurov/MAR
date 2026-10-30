@@ -138,6 +138,19 @@ def test_prompt_unknown_provider_still_renders(tmp_path: Path) -> None:
     assert "- ghost-labs (unverified provider) — default model: none" in prompt
 
 
+
+def test_prompt_local_endpoint_carries_url_and_omp_model_ref(tmp_path: Path) -> None:
+    model = "qwen3.8-flash-next-abliterated-iq3_s"
+    reg = _registry(
+        tmp_path, [_sub("strata", auth_method="none", key=None, model=model)]
+    )
+    prompt = render_prompt(reg)
+    assert (
+        f"- strata (Strata (local llama.cpp)) — default model: {model} — "
+        f"endpoint: http://192.168.1.242:9931/v1 "
+        f"(omp model: llama.cpp/{model})"
+    ) in prompt
+
 # ------------------------------------------------------------------------ sync
 
 
@@ -168,6 +181,37 @@ def test_sync_writes_env_var_provider_to_dotenv(tmp_path: Path) -> None:
     assert not (agent_dir / "agent.db").exists()
     content = (agent_dir / ".env").read_text(encoding="utf-8")
     assert content == f"CURSOR_ACCESS_TOKEN={FAKE_KEY}\n"
+
+
+def test_sync_writes_base_url_env_for_keyless_local_endpoint(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    model = "qwen3.8-flash-next-abliterated-iq3_s"
+    reg = _registry(
+        tmp_path, [_sub("strata", auth_method="none", key=None, model=model)]
+    )
+
+    report = sync(reg, agent_dir=agent_dir)
+
+    assert report == SyncReport(written=("llama.cpp",), skipped=())
+    content = (agent_dir / ".env").read_text(encoding="utf-8")
+    assert content == "LLAMA_CPP_BASE_URL=http://192.168.1.242:9931/v1\n"
+    assert not (agent_dir / "agent.db").exists()
+
+
+def test_sync_rewrites_existing_base_url_in_place(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    agent_dir.mkdir()
+    (agent_dir / ".env").write_text(
+        "LLAMA_CPP_BASE_URL=http://127.0.0.1:8080\nOTHER=keep\n", encoding="utf-8"
+    )
+    reg = _registry(tmp_path, [_sub("strata", auth_method="none", key=None)])
+
+    sync(reg, agent_dir=agent_dir)
+
+    content = (agent_dir / ".env").read_text(encoding="utf-8")
+    assert content == (
+        "LLAMA_CPP_BASE_URL=http://192.168.1.242:9931/v1\nOTHER=keep\n"
+    )
 
 
 def test_sync_skips_unverified_omp_id(
@@ -256,6 +300,19 @@ def test_sync_applies_model_roles_to_config_yml(tmp_path: Path) -> None:
     assert report.written == ("zai",)
     config = yaml.safe_load((agent_dir / "config.yml").read_text(encoding="utf-8"))
     assert config["modelRoles"] == roles
+
+
+def test_sync_standardizes_status_line_and_installs_extension(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    reg = _registry(tmp_path, [_sub("zai", model="glm-5.3-flash")])
+
+    report = sync(reg, agent_dir=agent_dir)
+
+    assert report.written == ("zai",)
+    config = yaml.safe_load((agent_dir / "config.yml").read_text(encoding="utf-8"))
+    assert config["statusLine"] == omp.standard_status_line()
+    extension = agent_dir / "extensions" / "mar-statusline.js"
+    assert extension.read_text(encoding="utf-8") == omp.status_line_extension()
 
 
 def test_sync_omp_error_skips_provider_and_continues(
