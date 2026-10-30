@@ -17,6 +17,9 @@ __all__ = ["CATALOG", "Provider", "get", "ids", "unverified", "validate"]
 
 _ID_PATTERN = r"^[a-z0-9][a-z0-9-]*$"
 _ID_RE = re.compile(_ID_PATTERN)
+# omp's roster uses dots for self-hosted engine ids (llama.cpp, lm-studio).
+_OMP_ID_PATTERN = r"^[a-z0-9][a-z0-9.-]*$"
+_OMP_ID_RE = re.compile(_OMP_ID_PATTERN)
 _ENV_PATTERN = r"^[A-Z][A-Z0-9_]*$"
 _ENV_RE = re.compile(_ENV_PATTERN)
 _LIMITS_KINDS = frozenset({"api", "manual"})
@@ -31,10 +34,11 @@ class Provider:
         id: Catalog identifier, lowercase kebab (``^[a-z0-9][a-z0-9-]*$``);
             the key used by registry entries to reference a provider.
         display: Human-readable name for CLI output.
-        auth_methods: Supported auth kinds; v1 ships ``("api_key",)`` only.
+        auth_methods: Supported auth kinds (``"api_key"`` for hosted
+            providers, ``"none"`` for a keyless self-hosted endpoint).
         key_url: Where the user creates/manages an API key for this provider.
-        limits_url: Where usage/limits are visible (web) or the documented
-            API base for ``limits_kind == "api"`` providers.
+        limits_url: Where usage/limits are visible (web), or empty for a
+            self-hosted endpoint whose ``base_url`` MAR probes instead.
         signup_url: Where a subscription is purchased/started.
         omp_provider_id: Value MAR writes into omp's ``agent.db``
             ``auth_credentials.provider``. Trustworthy only when
@@ -59,6 +63,14 @@ class Provider:
         verified: True only for facts confirmed live on this machine or via
             documented public API; False means best-known, unconfirmed.
         notes: Short human note; unconfirmed omp ids say "omp id unverified".
+        omp_base_url_env_var: When nonempty, omp reads this provider's
+            endpoint from this environment variable (written to the agent
+            dir's ``.env``) — the documented omp route for self-hosted
+            engines, e.g. ``LLAMA_CPP_BASE_URL``. Empty means the provider
+            has no configurable endpoint.
+        base_url: Endpoint MAR hands to omp for a self-hosted, keyless
+            provider (plain ``http://`` on the LAN is expected); empty for
+            every hosted provider.
     """
 
     id: str
@@ -75,6 +87,8 @@ class Provider:
     limits_kind: str
     verified: bool
     notes: str
+    omp_base_url_env_var: str = ""
+    base_url: str = ""
 
 
 CATALOG: tuple[Provider, ...] = (
@@ -295,6 +309,31 @@ CATALOG: tuple[Provider, ...] = (
             "reports credit balance + 5h/weekly windows; keys validated "
             "against /alpha/whoami."),
     ),
+    Provider(
+        id="strata",
+        display="Strata (local llama.cpp)",
+        auth_methods=("none",),
+        key_url="",
+        limits_url="",
+        signup_url="",
+        omp_provider_id="llama.cpp",
+        omp_env_var="",
+        export_env_var="",
+        export_oauth_env_var="",
+        default_model=None,
+        limits_kind="api",
+        verified=True,
+        notes=(
+            "Self-hosted llama.cpp server on the LAN; keyless, so MAR writes "
+            "no credential — only the endpoint (LLAMA_CPP_BASE_URL). Probed "
+            "live 2026-10-23: GET /v1/models reports "
+            "qwen3.8-flash-next-abliterated-iq3_s (n_ctx 131072, "
+            "input text+image); POST /v1/chat/completions and "
+            "POST /v1/responses answer; omp 18.12.6 completed a tool call "
+            "through it as llama.cpp/qwen3.8-flash-next-abliterated-iq3_s."),
+        omp_base_url_env_var="LLAMA_CPP_BASE_URL",
+        base_url="http://192.168.1.242:9931/v1",
+    ),
 )
 
 
@@ -302,7 +341,7 @@ def ids() -> tuple[str, ...]:
     """Return the catalog ids in their fixed, documented order.
 
     Returns:
-        Tuple of provider ids, exactly the 11 lines of docs/providers.md.
+        Tuple of provider ids, exactly the 13 lines of docs/providers.md.
     """
     return tuple(provider.id for provider in CATALOG)
 
@@ -331,11 +370,15 @@ def get(provider_id: str) -> Provider:
 def validate(catalog: Sequence[Provider] = CATALOG) -> list[str]:
     """Check catalog integrity; healthy input yields no problems.
 
-    Rules: unique ids; ids and omp_provider_id match
-    ``^[a-z0-9][a-z0-9-]*$``; omp_env_var matches ``^[A-Z][A-Z0-9_]*$``;
-    key_url/limits_url/signup_url start with
-    ``https://``; limits_kind in {"api", "manual"}; verified entries must
-    have a non-empty omp_provider_id and limits_url.
+    Rules: unique ids; catalog ids match ``^[a-z0-9][a-z0-9-]*$``;
+    omp_provider_id matches ``^[a-z0-9][a-z0-9.-]*$`` (omp spells
+    self-hosted engines with a dot: ``llama.cpp``); omp_env_var,
+    export_oauth_env_var and omp_base_url_env_var match
+    ``^[A-Z][A-Z0-9_]*$``;
+    key_url/limits_url/signup_url start with ``https://``; a non-empty
+    base_url starts with ``http://``/``https://`` and comes with an omp env
+    route; limits_kind in {"api", "manual"}; verified entries must have a
+    non-empty omp_provider_id and either limits_url or base_url.
 
     Args:
         catalog: Entries to check; defaults to the shipped CATALOG so the
@@ -371,15 +414,34 @@ def validate(catalog: Sequence[Provider] = CATALOG) -> list[str]:
             problems.append(
                 f"provider '{pid}': verified=True but omp_provider_id is empty"
             )
-        if provider.verified and not provider.limits_url:
+        if provider.base_url:
+            if not provider.base_url.startswith(("http://", "https://")):
+                problems.append(
+                    f"provider '{pid}': base_url must start with http:// or "
+                    f"https:// (got '{provider.base_url}')"
+                )
+            if not provider.omp_base_url_env_var:
+                problems.append(
+                    f"provider '{pid}': base_url requires "
+                    "omp_base_url_env_var (omp needs an env route for the "
+                    "endpoint)"
+                )
+        if provider.omp_base_url_env_var and not _ENV_RE.match(
+            provider.omp_base_url_env_var
+        ):
+            problems.append(
+                f"provider '{pid}': omp_base_url_env_var "
+                f"'{provider.omp_base_url_env_var}' does not match {_ENV_PATTERN}"
+            )
+        if provider.verified and not (provider.limits_url or provider.base_url):
             problems.append(
                 f"provider '{pid}': verified=True but limits_url is empty"
             )
         omp_id = provider.omp_provider_id
-        if omp_id and not _ID_RE.match(omp_id):
+        if omp_id and not _OMP_ID_RE.match(omp_id):
             problems.append(
                 f"provider '{pid}': omp_provider_id '{omp_id}' "
-                f"does not match {_ID_PATTERN}"
+                f"does not match {_OMP_ID_PATTERN}"
             )
         if provider.omp_env_var and not _ENV_RE.match(provider.omp_env_var):
             problems.append(

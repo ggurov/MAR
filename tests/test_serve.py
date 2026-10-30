@@ -38,6 +38,9 @@ class TestRenderConfig:
         assert "ZAI_API_KEY=zai-key-1234567890" in body
         assert "omp config set edit.mode hashline" in body
         assert "PI_STRICT_EDIT_MODE=1" in body
+        assert "omp config set composer.tokenRate true" in body
+        assert "omp config set memory.backend hindsight" in body
+        assert f"omp config set hindsight.apiUrl {cli.DEFAULT_GLOBAL_MEMORY_URL}" in body
         assert "BEGIN" not in body
         assert "END" not in body
 
@@ -53,6 +56,11 @@ class TestRenderConfig:
         body_after = serve.render_config(path, "bash")
         assert "ZAI_API_KEY" not in body_before
         assert "ZAI_API_KEY" in body_after
+
+    def test_memory_off_emits_no_memory_config(self, registry_path):
+        body = serve.render_config(registry_path, "bash", memory="off")
+        assert "omp config set memory.backend off" in body
+        assert "hindsight" not in body
 
 
 class TestServicesSnapshot:
@@ -472,6 +480,46 @@ class TestServicesSnapshot:
         )
         assert row["usage"] == "unavailable"
 
+    def test_keyless_local_endpoint_row_shows_endpoint_state(
+        self, registry_path, monkeypatch
+    ):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "strata",
+                "auth_method": "none",
+                "key": None,
+                "models": ["qwen3.8-flash-next-abliterated-iq3_s"],
+                "default_model": "qwen3.8-flash-next-abliterated-iq3_s",
+                "added_at": "2026-10-23T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+            },
+        )
+        calls = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append((provider_id, key))
+            return limits.LimitSnapshot(
+                provider="strata",
+                fetched_at="2026-10-23T00:00:00+00:00",
+                items=(),
+                source="api",
+                note="up: 1 model \u00b7 qwen3.8-flash-next-abliterated-iq3_s",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        row = next(
+            r for r in serve.services_snapshot(registry_path) if r["provider"] == "strata"
+        )
+        assert ("strata", "") in calls
+        assert row["usage"] == "up: 1 model \u00b7 qwen3.8-flash-next-abliterated-iq3_s"
+        assert row["endpoint"] == "http://192.168.1.242:9931/v1"
+        assert row["limits_url"] == ""
+
 
 class TestIndexHtml:
     def test_page_has_copy_buttons_repo_and_services(self, registry_path, monkeypatch):
@@ -518,7 +566,15 @@ class TestIndexHtml:
         )
         html = serve.render_index_html("localhost:8930", registry_path)
         assert "<!doctype html>" in html.lower()
-        assert "http://localhost:8930/config.sh | sh" in html
+        assert "http://localhost:8930/config.sh?memory=on | sh" in html
+        assert 'id="global-memory"' in html
+        assert "configure global memory" in html
+        assert (
+            '<a href="http://hub.nj02.gurov.us:9999/dashboard" target="_blank"'
+            ' rel="noopener">Open Hindsight dashboard</a>' in html
+        )
+        memory_card = html.split("<h2>Global memory</h2>", 1)[1].split("</div>", 1)[0]
+        assert "Open Hindsight dashboard" in memory_card
         assert "config.ps1" in html
         assert "navigator.clipboard" in body_guard(html)  # secure-context copy path
         assert "execCommand" in html  # non-secure-context fallback
@@ -537,6 +593,36 @@ class TestIndexHtml:
         assert "re-login:" not in html  # re-login hint removed from renew cell
         assert "omp /login" not in html  # old generic hint is gone
         assert "mar pull" in html  # renewal-flow note under the table
+
+    def test_page_links_self_hosted_endpoint_when_no_usage_page_exists(
+        self, registry_path, monkeypatch
+    ):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "strata",
+                "auth_method": "none",
+                "key": None,
+                "models": ["qwen3.8-flash-next-abliterated-iq3_s"],
+                "default_model": "qwen3.8-flash-next-abliterated-iq3_s",
+                "added_at": "2026-10-23T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+            },
+        )
+
+        def boom(provider_id, key, **kwargs):
+            raise limits.LimitError("down")
+
+        monkeypatch.setattr(serve.limits, "fetch", boom)
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        html = serve.render_index_html("localhost:8930", registry_path)
+        assert (
+            '<a href="http://192.168.1.242:9931/v1" target="_blank"'
+            ' rel="noopener"><b>strata</b></a>' in html
+        )
 
 
 def body_guard(html: str) -> str:
@@ -577,13 +663,31 @@ class TestHttpServer:
         assert status == 200
         assert "Set-Content" in body
 
+    def test_config_ps1_memory_off(self, server):
+        status, body = self._get(f"{server}/config.ps1?memory=off")
+        assert status == 200
+        assert "omp config set memory.backend off" in body
+        assert "hindsight" not in body
+
+    def test_config_sh_memory_on_by_default(self, server):
+        _, body = self._get(f"{server}/config.sh")
+        assert "omp config set memory.backend hindsight" in body
+        assert "omp config set hindsight.apiUrl http://hub.nj02.gurov.us:8888" in body
+
+    def test_config_sh_memory_off_unconfigures(self, server):
+        status, body = self._get(f"{server}/config.sh?memory=off")
+        assert status == 200
+        assert "omp config set memory.backend off" in body
+        assert "hindsight" not in body
+
     def test_index_is_html_with_copy_and_repo_links(self, server):
         status, body = self._get(f"{server}/")
         assert status == 200
         assert "<!doctype html>" in body.lower()
         assert "text/html" in self._content_type(f"{server}/")
         host = server.split("//")[1]
-        assert f"http://{host}/config.sh | sh" in body
+        assert f"http://{host}/config.sh?memory=on | sh" in body
+        assert 'id="global-memory"' in body
         assert "github.com/ggurov/MAR" in body
         assert "navigator.clipboard" in body  # secure-context copy path
         assert "execCommand" in body  # non-secure-context fallback
@@ -596,3 +700,107 @@ class TestHttpServer:
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             self._get(f"{server}/nope")
         assert excinfo.value.code == 404
+
+
+class TestServeCaching:
+    def test_stale_omp_usage_serves_stale_and_refreshes(self, monkeypatch):
+        monkeypatch.setattr(serve, "_omp_refresh_lock", threading.Lock())
+        monkeypatch.setattr(
+            serve, "_omp_cache", {"ts": time.monotonic() - 1000, "data": {"old": []}}
+        )
+        refreshed = threading.Event()
+        calls = []
+
+        def fake():
+            calls.append(1)
+            refreshed.set()
+            return {"reports": [{"provider": "zai", "limits": [{"id": "zai:5h"}]}]}
+
+        monkeypatch.setattr(serve, "_run_omp_usage", fake)
+        assert serve._omp_usage() == {"old": []}  # stale data, no wait
+        assert refreshed.wait(2)
+        deadline = time.monotonic() + 2
+        while serve._omp_cache.get("data") == {"old": []} and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serve._omp_cache["data"] == {"zai": [{"id": "zai:5h"}]}
+        assert calls == [1]
+
+    def test_cold_omp_usage_returns_empty_while_refresh_runs(self, monkeypatch):
+        monkeypatch.setattr(serve, "_omp_refresh_lock", threading.Lock())
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def fake():
+            calls.append(1)
+            started.set()
+            release.wait(2)
+            return {"reports": []}
+
+        monkeypatch.setattr(serve, "_run_omp_usage", fake)
+        thread = serve._refresh_omp_usage_async()
+        assert thread is not None
+        assert started.wait(2)
+        assert serve._omp_usage() == {}  # refresh in flight: never block the page
+        release.set()
+        thread.join(2)
+        assert calls == [1]
+
+    def test_stale_usage_cell_serves_stale_and_refreshes(self, monkeypatch):
+        monkeypatch.setattr(serve, "_usage_locks", {})
+        monkeypatch.setattr(
+            serve, "_usage_cache", {"openrouter": (time.monotonic() - 1000, "$1.00 left")}
+        )
+        refreshed = threading.Event()
+        calls = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append(provider_id)
+            refreshed.set()
+            return limits.LimitSnapshot(
+                provider="openrouter",
+                fetched_at="2026-10-29T00:00:00+00:00",
+                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        assert serve._usage_cell("openrouter", "key") == "$1.00 left"  # stale, no wait
+        assert refreshed.wait(2)
+        deadline = time.monotonic() + 2
+        while serve._usage_cache["openrouter"][1] != "$315.00 left" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serve._usage_cache["openrouter"][1] == "$315.00 left"
+        assert calls == ["openrouter"]
+
+    def test_stale_usage_cell_refresh_is_single_flight(self, monkeypatch):
+        monkeypatch.setattr(serve, "_usage_locks", {})
+        monkeypatch.setattr(
+            serve, "_usage_cache", {"openrouter": (time.monotonic() - 1000, "$1.00 left")}
+        )
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append(provider_id)
+            started.set()
+            release.wait(2)
+            return limits.LimitSnapshot(
+                provider="openrouter",
+                fetched_at="2026-10-29T00:00:00+00:00",
+                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        assert serve._usage_cell("openrouter", "key") == "$1.00 left"
+        assert started.wait(2)
+        assert serve._usage_cell("openrouter", "key") == "$1.00 left"
+        release.set()
+        deadline = time.monotonic() + 2
+        while serve._usage_cache["openrouter"][1] != "$315.00 left" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serve._usage_cache["openrouter"][1] == "$315.00 left"
+        assert calls == ["openrouter"]

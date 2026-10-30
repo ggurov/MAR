@@ -1,13 +1,18 @@
-"""omp adapter: write provider credentials into agent.db and model roles into config.yml.
+"""omp adapter: write provider credentials and display settings into an omp install.
 
 MAR pushes the user's subscription keys into an Oh My Pi (omp) install so omp
-itself authenticates against providers. Two artifacts are touched:
+itself authenticates against providers. Three artifacts are touched:
 
 - ``<agent_dir>/agent.db`` — SQLite store, table ``auth_credentials`` (DDL
   verified against a live omp install; kept verbatim in
   ``_AUTH_CREDENTIALS_DDL`` and mirrored in docs/architecture.md).
-- ``<agent_dir>/config.yml`` — omp config; MAR only edits the ``modelRoles``
-  mapping and leaves every other top-level key alone.
+- ``<agent_dir>/config.yml`` — omp config; MAR edits ``modelRoles`` and the
+  ``statusLine`` segment list, leaving every other top-level key alone.
+- ``<agent_dir>/extensions/mar-statusline.js`` — a tiny omp extension that
+  prints its glyph (the compact thinking symbol when the model exposes
+  levels; else the model icon) and ``provider/api-id`` on its own line above
+  the status band, because omp's built-in ``model`` segment shows a catalog
+  display name instead.
 
 MAR is not a proxy: nothing here carries model traffic.
 """
@@ -28,11 +33,16 @@ __all__ = [
     "OmpError",
     "default_agent_dir",
     "list_credentials",
+    "read_env_credentials",
     "read_model_roles",
     "read_oauth_credentials",
     "set_model_role",
+    "standard_status_line",
+    "status_line_extension",
     "upsert_credential",
     "upsert_env_key",
+    "write_status_line",
+    "write_status_line_extension",
 ]
 
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -158,6 +168,60 @@ def list_credentials(agent_dir: Path) -> list[tuple[str, str]]:
     return [(row[0], row[1]) for row in rows]
 
 
+def _load_config(agent_dir: Path) -> tuple[Path, dict[str, object]]:
+    """Load ``<agent_dir>/config.yml`` as a mapping.
+
+    Args:
+        agent_dir: omp agent directory holding config.yml.
+
+    Returns:
+        ``(config_path, config)``. A missing or empty file yields ``{}``.
+
+    Raises:
+        OmpError: If the file cannot be read, is invalid YAML, or does not
+            contain a YAML mapping.
+    """
+    config_path = Path(agent_dir) / "config.yml"
+    config: dict[str, object] = {}
+    if config_path.exists():
+        try:
+            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise OmpError(f"failed to read {config_path}: {exc}") from exc
+        except yaml.YAMLError as exc:
+            raise OmpError(f"{config_path} is not valid YAML: {exc}") from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict):
+            raise OmpError(f"{config_path} does not contain a YAML mapping")
+        config = loaded
+    return config_path, config
+
+
+def _write_config(
+    agent_dir: Path, config_path: Path, config: dict[str, object]
+) -> None:
+    """Write a config mapping back to ``config_path``, creating the directory.
+
+    Args:
+        agent_dir: omp agent directory.
+        config_path: target config.yml path.
+        config: complete mapping to serialize.
+
+    Raises:
+        OmpError: If the directory or file cannot be written.
+    """
+    agent_dir = Path(agent_dir)
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        config_path.write_text(
+            yaml.safe_dump(config, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise OmpError(f"failed to write {config_path}: {exc}") from exc
+
+
 def set_model_role(agent_dir: Path, role: str, model: str) -> None:
     """Set one entry of the ``modelRoles`` mapping in config.yml.
 
@@ -181,18 +245,7 @@ def set_model_role(agent_dir: Path, role: str, model: str) -> None:
     if not model or not model.strip():
         raise OmpError("model must be a non-empty string")
     agent_dir = Path(agent_dir)
-    config_path = agent_dir / "config.yml"
-    config: dict[str, object] = {}
-    if config_path.exists():
-        try:
-            loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as exc:
-            raise OmpError(f"{config_path} is not valid YAML: {exc}") from exc
-        if loaded is None:
-            loaded = {}
-        if not isinstance(loaded, dict):
-            raise OmpError(f"{config_path} does not contain a YAML mapping")
-        config = loaded
+    config_path, config = _load_config(agent_dir)
     roles = config.get("modelRoles", {})
     if roles is None:
         roles = {}
@@ -200,14 +253,52 @@ def set_model_role(agent_dir: Path, role: str, model: str) -> None:
         raise OmpError(f"{config_path} has a non-mapping modelRoles entry")
     roles[role] = model
     config["modelRoles"] = roles
-    agent_dir.mkdir(parents=True, exist_ok=True)
+    _write_config(agent_dir, config_path, config)
+
+
+def read_env_credentials(agent_dir: Path) -> dict[str, str]:
+    """Read credential variables from ``<agent_dir>/.env``.
+
+    omp loads this file as its environment fallback, so on installs that
+    authenticate through env vars instead of ``agent.db`` login rows it is
+    the authoritative credential source. Parsing mirrors ``upsert_env_key``:
+    blank lines and ``#`` comments are skipped, a leading ``export `` is
+    ignored, and a matching pair of surrounding single or double quotes is
+    stripped. Later lines override earlier ones (shell sourcing semantics),
+    and names must match ``^[A-Z][A-Z0-9_]*$``.
+
+    Args:
+        agent_dir: omp agent directory that may contain ``.env``.
+
+    Returns:
+        Mapping of environment variable name to value; empty values are
+        returned as ``""`` so callers can distinguish "unset" from "blank".
+        An absent file yields ``{}``.
+
+    Raises:
+        OmpError: If the file exists but cannot be read.
+    """
+    env_path = Path(agent_dir) / ".env"
+    if not env_path.exists():
+        return {}
     try:
-        config_path.write_text(
-            yaml.safe_dump(config, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        text = env_path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise OmpError(f"failed to write {config_path}: {exc}") from exc
+        raise OmpError(f"failed to read {env_path}: {exc}") from exc
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        name = name.strip().removeprefix("export ").strip()
+        if not _ENV_NAME_RE.match(name):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[name] = value
+    return values
 
 
 def upsert_env_key(agent_dir: Path, var: str, key: str) -> None:
@@ -367,54 +458,143 @@ def read_model_roles(agent_dir: Path) -> dict[str, str]:
     return dict(roles)
 
 
-def read_status_line(agent_dir: Path) -> dict[str, str | list[str]]:
-    """Read the ``statusLine`` mapping from ``<agent_dir>/config.yml``.
+def standard_status_line() -> dict[str, str | list[str]]:
+    """Return MAR's standard omp ``statusLine`` segment configuration.
 
-    Args:
-        agent_dir: omp agent directory whose ``config.yml`` is read.
+    The built-in ``model`` segment is deliberately absent: it renders the
+    catalog display name (mixed case, provider-specific), not the API model
+    id. :func:`write_status_line_extension` supplies ``provider/id`` on its
+    own line above the band instead.
 
     Returns:
-        Mapping with ``preset`` (str) and/or ``leftSegments`` /
-        ``rightSegments`` (list of strings) for whichever keys are set;
-        empty dict when the file is missing or has no ``statusLine`` key.
+        A fresh mapping with ``preset``, ``leftSegments``, and
+        ``rightSegments`` suitable for ``config.yml``.
+    """
+    return {
+        "preset": "custom",
+        "leftSegments": ["vim", "hostname", "mode", "path", "git", "pr"],
+        "rightSegments": ["session_name", "token_total", "cost", "context_pct"],
+    }
+
+
+def write_status_line(agent_dir: Path) -> None:
+    """Apply :func:`standard_status_line` to ``config.yml``.
+
+    Loads the config, replaces only ``statusLine.preset``,
+    ``statusLine.leftSegments``, and ``statusLine.rightSegments``, and writes
+    it back. Other ``statusLine`` preferences (separator, context line, …)
+    and every other top-level key are preserved. This also removes the
+    built-in ``model`` segment from configs that still carry it.
+
+    Args:
+        agent_dir: omp agent directory holding config.yml (created if missing).
 
     Raises:
-        OmpError: If the file cannot be read/parsed, ``statusLine`` is not
-            a mapping, ``preset`` is not a string, or a segments value is
-            not a list of strings.
+        OmpError: If config.yml is unreadable/invalid, ``statusLine`` is not a
+            mapping, or the write failed.
     """
-    config_path = agent_dir / "config.yml"
-    if not config_path.exists():
-        return {}
-    try:
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise OmpError(f"failed to read {config_path}: {exc}") from exc
-    except yaml.YAMLError as exc:
-        raise OmpError(f"malformed YAML in {config_path}: {exc}") from exc
-    if not isinstance(config, dict) or "statusLine" not in config:
-        return {}
-    status = config["statusLine"]
+    agent_dir = Path(agent_dir)
+    config_path, config = _load_config(agent_dir)
+    status = config.get("statusLine", {})
     if status is None:
-        return {}
+        status = {}
     if not isinstance(status, dict):
-        raise OmpError(f"{config_path} has a non-mapping statusLine value")
-    result: dict[str, str | list[str]] = {}
-    preset = status.get("preset")
-    if preset is not None:
-        if not isinstance(preset, str):
-            raise OmpError(f"{config_path} statusLine.preset is not a string")
-        result["preset"] = preset
-    for key in ("leftSegments", "rightSegments"):
-        segments = status.get(key)
-        if segments is None:
-            continue
-        if not isinstance(segments, list) or not all(
-            isinstance(s, str) for s in segments
-        ):
-            raise OmpError(f"{config_path} statusLine.{key} is not a string list")
-        result[key] = list(segments)
-    return result
+        raise OmpError(f"{config_path} has a non-mapping statusLine entry")
+    status.update(standard_status_line())
+    config["statusLine"] = status
+    _write_config(agent_dir, config_path, config)
+
+
+_STATUS_LINE_EXTENSION = """\
+// omp's built-in `model` segment prints the catalog display name, which is
+// not the API id, and carries its glyph. Render both on their own line above
+// the composer band: `<glyph> provider/id`. The glyph is the compact
+// thinking-level symbol when the model exposes levels, else the model icon.
+export default function (pi) {
+    let current;
+    let last;
+    let timer;
+
+    const modelGlyph = model => {
+        const theme = current.ui.theme;
+        if (!theme) return "";
+        if (!model.thinking) return theme.icon.model || "";
+        const level = pi.getThinkingLevel();
+        if (!level || level === "off") return theme.status.disabled || "";
+        const display = theme.thinking && theme.thinking[level];
+        return display ? display.split(" ")[0] : theme.icon.model || "";
+    };
+
+    const render = () => {
+        if (!current || typeof current.ui.setWidget !== "function") return;
+        const model = current.model;
+        if (!model || !model.id) return;
+        const glyph = modelGlyph(model);
+        const line = (glyph ? glyph + " " : "") + model.provider + "/" + model.id;
+        if (line === last) return;
+        last = line;
+        current.ui.setWidget("mar-model", [line], { placement: "aboveEditor" });
+    };
+
+    // The session model is a live getter (`ctx.model`), but omp has no
+    // model/thinking-change event an extension can observe, so a change
+    // mid-session would otherwise never repaint. Poll; `ctx.setInterval`
+    // (unlike a raw timer) is contained and cleared on session shutdown.
+    const bind = ctx => {
+        // Subagent sessions share the extension instance; only the top-level
+        // session owns the terminal widget.
+        if (ctx.agent && ctx.agent.kind !== "main") return;
+        const previous = current;
+        current = ctx;
+        last = undefined;
+        if (timer && previous && typeof previous.clearTimer === "function") {
+            previous.clearTimer(timer);
+        }
+        timer = typeof ctx.setInterval === "function" ? ctx.setInterval(render, 200) : undefined;
+        render();
+    };
+
+    pi.on("session_start", async (_event, ctx) => bind(ctx));
+    pi.on("session_switch", async (_event, ctx) => bind(ctx));
+}
+"""
+
+
+def status_line_extension() -> str:
+    """Return the JavaScript source for MAR's omp status-line extension.
+
+    Returns:
+        The complete extension module as text. It is dependency-free (no
+        runtime import) so omp's loader can evaluate it from
+        ``<agent_dir>/extensions`` without resolving a package path.
+    """
+    return _STATUS_LINE_EXTENSION
+
+
+def write_status_line_extension(agent_dir: Path) -> Path:
+    """Install the MAR status-line extension under ``<agent_dir>/extensions``.
+
+    Overwrites ``mar-statusline.js`` with the current
+    :func:`status_line_extension` source; other extensions are untouched.
+
+    Args:
+        agent_dir: omp agent directory (created if missing).
+
+    Returns:
+        Path to the written extension file.
+
+    Raises:
+        OmpError: If the directory or file cannot be written.
+    """
+    agent_dir = Path(agent_dir)
+    extensions_dir = agent_dir / "extensions"
+    target = extensions_dir / "mar-statusline.js"
+    try:
+        extensions_dir.mkdir(parents=True, exist_ok=True)
+        target.write_text(status_line_extension(), encoding="utf-8")
+    except OSError as exc:
+        raise OmpError(f"failed to write {target}: {exc}") from exc
+    return target
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

@@ -18,21 +18,28 @@ import contextlib
 import html as html_mod
 import io
 import json
+import os
 import socket
 import subprocess
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from mar import cli, limits, providers
 
 REPO_URL = "https://github.com/ggurov/MAR"
+HINDSIGHT_DASHBOARD_URL = "http://hub.nj02.gurov.us:9999/dashboard"
 _USAGE_TTL_SECONDS = 60.0
 _usage_cache: dict[str, tuple[float, str]] = {}
+_usage_locks: dict[str, threading.Lock] = {}
+_usage_locks_guard = threading.Lock()
 
 
-def render_config(registry: Path, shell: str, backend: str | None = None) -> str:
+def render_config(
+    registry: Path, shell: str, backend: str | None = None, memory: str = "on"
+) -> str:
     """Render the ``mar export`` payload for one shell, minus the markers.
 
     Args:
@@ -40,6 +47,8 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         shell: ``"bash"`` or ``"powershell"``.
         backend: Optional storage backend name; when given it is passed
             through, otherwise the file backend is forced via the path.
+        memory: ``"on"`` (default) configures the global hindsight backend;
+            ``"off"`` writes ``memory.backend off`` so the box stops using memory.
 
     Returns:
         The payload body exactly as ``mar export`` prints between the
@@ -56,6 +65,7 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         argv += ["--backend", backend]
     else:
         argv += ["--registry", str(registry)]
+    argv += ["--memory", memory]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         cli.main(argv)
     lines = [
@@ -66,41 +76,107 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
     return "\n".join(lines).strip("\n")
 
 
-def _usage_cell(provider: str, key: str | None) -> str | None:
-    """Return the quota text for one provider, caching live fetches.
+def _provider_usage_lock(provider: str) -> threading.Lock:
+    """Return the per-provider lock guarding one live usage fetch."""
+    with _usage_locks_guard:
+        return _usage_locks.setdefault(provider, threading.Lock())
 
-    Only OpenRouter has a shipped fetcher; every other provider yields
-    ``None`` here and relies on the usage-page link instead.
+
+def _fetch_usage_cell(provider: str, key: str | None) -> str:
+    """Fetch one provider's live quota cell.
+
+    Raises:
+        Exception: Any fetch/parse failure (callers decide the fallback).
+    """
+    snapshot = limits.fetch(provider, key or "", timeout=5.0)
+    if snapshot.items:
+        item = snapshot.items[0]
+        if item.limit is not None:
+            return f"${item.limit - (item.used or 0):.2f} left"
+        return f"${item.used or 0:.2f} used"
+    return snapshot.note or "ok"
+
+
+def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | None:
+    """Refresh one provider's quota cell in the background, single-flight.
+
+    Returns:
+        The started thread, or ``None`` when a refresh is already running.
+    """
+    lock = _provider_usage_lock(provider)
+    if not lock.acquire(blocking=False):
+        return None
+    cache = _usage_cache
+    previous = cache.get(provider)
+
+    def worker() -> None:
+        try:
+            cell = _fetch_usage_cell(provider, key)
+        except Exception:  # noqa: BLE001 — keep the last good cell
+            cell = previous[1] if previous is not None else "unavailable"
+        finally:
+            cache[provider] = (time.monotonic(), cell)
+            lock.release()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
+def _usage_cell(provider: str, key: str | None) -> str | None:
+    """Return the live quota text for one provider, cached and non-blocking.
+
+    Every ``limits_kind == "api"`` catalog entry is fetched: OpenRouter
+    reports credits (rendered as dollars), Gemini reports key liveness, and
+    the self-hosted ``strata`` engine reports its loaded model — for
+    fetchers without numeric items the snapshot's own ``note`` is the cell.
+
+    A fresh cache entry is returned directly. A stale entry is returned
+    immediately while a single background refresh runs, so rendering the
+    page never waits on a provider API. Only the first call for a provider
+    fetches synchronously; if another refresh already holds the provider
+    lock, ``None`` is returned so the page still renders fast.
 
     Args:
         provider: Catalog id.
-        key: The provider credential used for the live fetch.
+        key: The provider credential used for the live fetch (unused by
+            keyless endpoints).
 
     Returns:
-        Human quota text, e.g. ``"$315.00 left"``; ``None``
-        when the provider has no live fetcher. Fetch failures degrade to
-        ``"unavailable"``.
+        Human quota text, e.g. ``"$315.00 left"``; ``None`` when the
+        provider has no live fetcher or a refresh is already in flight.
+        Fetch failures degrade to ``"unavailable"`` (or keep the last
+        good cell when refreshing in the background).
     """
-    if provider != "openrouter":
-        return None
-    cached = _usage_cache.get(provider)
-    if cached is not None and time.monotonic() - cached[0] < _USAGE_TTL_SECONDS:
-        return cached[1]
     try:
-        snapshot = limits.fetch(provider, key or "", timeout=5.0)
-        item = snapshot.items[0]
-        if item.limit is not None:
-            cell = f"${item.limit - (item.used or 0):.2f} left"
-        else:
-            cell = f"${item.used or 0:.2f} used"
+        entry = providers.get(provider)
+    except KeyError:
+        return None
+    if entry.limits_kind != "api":
+        return None
+    now = time.monotonic()
+    cached = _usage_cache.get(provider)
+    if cached is not None and now - cached[0] < _USAGE_TTL_SECONDS:
+        return cached[1]
+    if cached is not None:
+        _refresh_usage_async(provider, key)
+        return cached[1]
+    lock = _provider_usage_lock(provider)
+    if not lock.acquire(blocking=False):
+        return None
+    try:
+        cell = _fetch_usage_cell(provider, key)
     except Exception:  # noqa: BLE001 — a dead usage API must never 500 the page
         cell = "unavailable"
-    _usage_cache[provider] = (time.monotonic(), cell)
+    finally:
+        _usage_cache[provider] = (time.monotonic(), cell)
+        lock.release()
     return cell
 
 
 _OMP_TTL_SECONDS = 300.0
 _omp_cache: dict = {}
+_omp_refresh_lock = threading.Lock()
 
 
 def _run_omp_usage() -> dict:
@@ -124,25 +200,66 @@ def _run_omp_usage() -> dict:
     return json.loads(done.stdout)
 
 
+def _refresh_omp_usage_async() -> threading.Thread | None:
+    """Refresh ``omp usage`` in the background, single-flight.
+
+    Returns:
+        The started thread, or ``None`` when a refresh is already running.
+    """
+    if not _omp_refresh_lock.acquire(blocking=False):
+        return None
+    cache = _omp_cache
+
+    def worker() -> None:
+        reports: dict[str, list] | None = None
+        try:
+            data = _run_omp_usage()
+            reports = {r["provider"]: r.get("limits", []) for r in data.get("reports", [])}
+        except Exception:  # noqa: BLE001 — keep the last good snapshot
+            reports = None
+        finally:
+            cache["ts"] = time.monotonic()
+            if reports is not None:
+                cache["data"] = reports
+            _omp_refresh_lock.release()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
 def _omp_usage() -> dict[str, list]:
     """Return omp's usage reports, cached for :data:`_OMP_TTL_SECONDS`.
 
-    Stale data is served when a refresh fails — a dead CLI must never
-    break the page.
+    Fresh data is returned directly. Stale data is returned immediately
+    while a single background refresh runs, so a page render never waits
+    on ``omp usage``. With no cache at all the call fetches synchronously
+    unless another refresh is already in flight, in which case it returns
+    an empty mapping so the page still renders fast.
 
     Returns:
         Mapping of omp provider id to its ``limits`` list (possibly empty).
     """
     now = time.monotonic()
-    if _omp_cache.get("ts") is not None and now - _omp_cache["ts"] < _OMP_TTL_SECONDS:
-        return _omp_cache.get("data", {})
+    cache = _omp_cache
+    data = cache.get("data")
+    ts = cache.get("ts")
+    if data is not None and ts is not None and now - ts < _OMP_TTL_SECONDS:
+        return data
+    if data is not None:
+        _refresh_omp_usage_async()
+        return data
+    if not _omp_refresh_lock.acquire(blocking=False):
+        return {}
     try:
-        data = _run_omp_usage()
-        reports = {r["provider"]: r.get("limits", []) for r in data.get("reports", [])}
+        raw = _run_omp_usage()
+        reports = {r["provider"]: r.get("limits", []) for r in raw.get("reports", [])}
     except Exception:  # noqa: BLE001 — degrade to the last good snapshot
-        reports = _omp_cache.get("data", {})
-    _omp_cache["ts"] = now
-    _omp_cache["data"] = reports
+        reports = {}
+    finally:
+        cache["ts"] = time.monotonic()
+        cache["data"] = reports
+        _omp_refresh_lock.release()
     return reports
 
 
@@ -258,12 +375,14 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     Returns:
         One dict per active subscription with keys ``provider``,
         ``auth``, ``usage`` (quota text from ``omp usage`` windows —
-        each window carries its own ``resets in X`` countdown — or the
-        OpenRouter credits fetch; ``None`` when a provider reports
-        neither), ``renew`` (oauth token expiry only: ``in 7.9h`` under
-        48 hours, ``in ~N days`` under a year, ``""`` for longer-lived
-        tokens, ``EXPIRED`` once past; empty string when nothing
-        expires), and ``limits_url``.
+        each window carries its own ``resets in X`` countdown — else the
+        live fetch for any ``limits_kind == "api"`` catalog entry, which
+        for a self-hosted endpoint reports its loaded model; ``None`` when
+        a provider reports neither), ``renew`` (oauth token expiry only:
+        ``in 7.9h`` under 48 hours, ``in ~N days`` under a year, ``""``
+        for longer-lived tokens, ``EXPIRED`` once past; empty string when
+        nothing expires), ``limits_url``, and ``endpoint`` (the catalog
+        ``base_url`` for a self-hosted entry, else ``""``).
     """
     rows: list[dict[str, str | None]] = []
     reg = cli.registry.Registry.load(registry)
@@ -271,12 +390,13 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
     usage_map = _omp_usage()
     for sub in reg.active():
         try:
-            limits_url = providers.get(sub.provider).limits_url
+            entry = providers.get(sub.provider)
         except KeyError:
-            limits_url = ""
+            entry = None
+        limits_url = entry.limits_url if entry else ""
         omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
         quota, _ = _format_limits(omp_limits)
-        if quota is None and sub.provider == "openrouter":
+        if quota is None:
             quota = _usage_cell(sub.provider, sub.key)
         if sub.auth_method == "oauth" and sub.expires_at_ms:
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
@@ -290,6 +410,7 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
                 "usage": quota,
                 "renew": renew,
                 "limits_url": limits_url,
+                "endpoint": entry.base_url if entry else "",
             }
         )
     return rows
@@ -308,15 +429,21 @@ def render_index_html(host: str, registry: Path) -> str:
         (quota, renewal, provider usage link), a plaintext-HTTP warning, and the
         GitHub repo link.
     """
-    sh_cmd = f"curl -fsSL http://{host}/config.sh | sh"
-    ps_cmd = f"irm http://{host}/config.ps1 | iex"
+    sh_cmd = f"curl -fsSL http://{host}/config.sh?memory=on | sh"
+    ps_cmd = f"irm http://{host}/config.ps1?memory=on | iex"
+    memory_url = os.environ.get("MAR_MEMORY_URL") or cli.DEFAULT_GLOBAL_MEMORY_URL
+    dashboard_link = (
+        f'<a href="{HINDSIGHT_DASHBOARD_URL}" target="_blank"'
+        ' rel="noopener">Open Hindsight dashboard</a>'
+    )
     rows_html: list[str] = []
     for row in services_snapshot(registry):
         usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
         name = html_mod.escape(row["provider"])
-        if row["limits_url"]:
+        link = row["limits_url"] or row["endpoint"]
+        if link:
             provider = (
-                f'<a href="{html_mod.escape(row["limits_url"])}" target="_blank"'
+                f'<a href="{html_mod.escape(link)}" target="_blank"'
                 f' rel="noopener"><b>{name}</b></a>'
             )
         else:
@@ -385,7 +512,7 @@ def render_index_html(host: str, registry: Path) -> str:
     <code class="cmd" id="sh-cmd">{sh_cmd}</code>
     <div class="row">
       <button onclick="copyEl('sh-cmd', this)">Copy command</button>
-      <button class="ghost" onclick="copyFetch('/config.sh', this)">Copy payload</button>
+      <button class="ghost" onclick="copyFetch('/config.sh?memory='+memParam(), this)">Copy payload</button>
     </div>
   </div>
 
@@ -394,8 +521,19 @@ def render_index_html(host: str, registry: Path) -> str:
     <code class="cmd" id="ps-cmd">{ps_cmd}</code>
     <div class="row">
       <button onclick="copyEl('ps-cmd', this)">Copy command</button>
-      <button class="ghost" onclick="copyFetch('/config.ps1', this)">Copy payload</button>
+      <button class="ghost" onclick="copyFetch('/config.ps1?memory='+memParam(), this)">Copy payload</button>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Global memory</h2>
+    <label style="display:flex; gap:8px; align-items:center; font-weight:600;">
+      <input type="checkbox" id="global-memory" checked> configure global memory
+    </label>
+    <p class="note">Checked: the payload sets <code>memory.backend = hindsight</code> pointed at
+       <code>{memory_url}</code>. Unchecked: it sets <code>memory.backend = off</code>, so the
+       box is unconfigured from using memory.</p>
+    <p class="note">{dashboard_link}</p>
   </div>
 
   <div class="card">
@@ -434,6 +572,18 @@ async function copyFetch(path, btn) {{
   const r = await fetch(path);
   copyText(await r.text(), btn);
 }}
+function memParam() {{
+  return document.getElementById('global-memory').checked ? 'on' : 'off';
+}}
+function refreshCommands() {{
+  const HOST = "{host}";
+  document.getElementById('sh-cmd').textContent =
+    'curl -fsSL http://' + HOST + '/config.sh?memory=' + memParam() + ' | sh';
+  document.getElementById('ps-cmd').textContent =
+    'irm http://' + HOST + '/config.ps1?memory=' + memParam() + ' | iex';
+}}
+document.getElementById('global-memory').addEventListener('change', refreshCommands);
+refreshCommands();
 </script>
 </body>
 </html>
@@ -488,19 +638,25 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
 
         def do_GET(self) -> None:  # stdlib naming convention
             host = self.headers.get("Host", "localhost")
-            if self.path == "/config.sh":
+            parsed = urllib.parse.urlsplit(self.path)
+            memory = (
+                "off"
+                if urllib.parse.parse_qs(parsed.query).get("memory") == ["off"]
+                else "on"
+            )
+            if parsed.path == "/config.sh":
                 self._send(
                     200,
-                    render_config(registry, "bash", backend),
+                    render_config(registry, "bash", backend, memory),
                     "text/x-shellscript; charset=utf-8",
                 )
-            elif self.path == "/config.ps1":
+            elif parsed.path == "/config.ps1":
                 self._send(
                     200,
-                    render_config(registry, "powershell", backend),
+                    render_config(registry, "powershell", backend, memory),
                     "text/plain; charset=utf-8",
                 )
-            elif self.path == "/":
+            elif parsed.path == "/":
                 self._send(
                     200, render_index_html(host, registry), "text/html; charset=utf-8"
                 )
@@ -511,6 +667,18 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
             """Quiet default per-request logging to keep the console clean."""
 
     return Handler
+
+
+def _warm_caches(registry: Path) -> None:
+    """Populate the usage caches once at startup, best-effort.
+
+    Args:
+        registry: Path to the MAR registry file.
+    """
+    try:
+        services_snapshot(registry)
+    except Exception:  # noqa: BLE001 — warming must never break startup
+        return
 
 
 def serve(host: str, port: int, registry: Path, backend: str | None = None) -> None:
@@ -525,9 +693,9 @@ def serve(host: str, port: int, registry: Path, backend: str | None = None) -> N
     Raises:
         OSError: If the port cannot be bound.
     """
-    # Warm the omp usage cache in the background — the first page view
+    # Warm the usage caches in the background — the first page view
     # should not wait on a full provider sweep.
-    threading.Thread(target=_omp_usage, daemon=True).start()
+    threading.Thread(target=_warm_caches, args=(registry,), daemon=True).start()
     server = ThreadingHTTPServer((host, port), make_handler(registry, backend))
     try:
         server.serve_forever()

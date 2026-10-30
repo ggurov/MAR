@@ -1,13 +1,15 @@
 # Provider catalog data
 
-The 12 lines below are the user's subscriptions (problem statement minus
+The 13 lines below are the user's subscriptions (problem statement minus
 codebuddy, dropped by the user; plus `jev`, the Typesafe judge model that
-backs omp's `modelRoles.judge`; plus `gemini` and `commandcode`). Editorial
-source for `src/mar/providers.py`; keep both in sync.
+backs omp's `modelRoles.judge`; plus `gemini`, `commandcode`, and `strata`, the
+user's self-hosted llama.cpp box). Editorial source for
+`src/mar/providers.py`; keep both in sync.
 
 Verification: every omp id/env var below was confirmed against omp's official
 provider roster (omp://providers.md, 2026-10-10); `cline`, `opencode`, `zai`
-ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
+ids were additionally observed live in `~/.omp/agent/agent.db`; `strata` was
+probed live on its LAN endpoint (2026-10-23). All thirteen are
 `verified=True`; `unverified()` returns empty.
 
 | # | id | display | omp_provider_id | credential route | key_url | limits_url | limits_kind |
@@ -24,6 +26,7 @@ ids were additionally observed live in `~/.omp/agent/agent.db`. All nine are
 | 10 | jev | Jev (Typesafe) | typesafe | env `TYPESAFE_API_KEY` | https://typesafe.ai | https://console.typesafe.ai/usage | manual |
 | 11 | gemini | Google Gemini | google | env `GEMINI_API_KEY` | https://aistudio.google.com/api/keys | https://aistudio.google.com/usage | manual |
 | 12 | commandcode | Command Code | commandcode | env `COMMAND_CODE_API_KEY` | https://commandcode.ai | https://commandcode.ai/settings/usage | manual |
+| 13 | strata | Strata (local llama.cpp) | llama.cpp | env `LLAMA_CPP_BASE_URL` (endpoint; no key) | — | `{endpoint}/models` probe | api |
 
 Notes:
 
@@ -51,3 +54,20 @@ Notes:
   `limits_url` for the rest (M8 widens this).
 - Default models are the user's choice at `mar add` time; the catalog never
   invents one.
+
+## strata (self-hosted llama.cpp)
+
+Probed live 2026-10-23 at `http://192.168.1.242:9931/v1` (llama.cpp server):
+
+- `GET /v1/models` → one model, `qwen3.8-flash-next-abliterated-iq3_s`,
+  `status.value: loaded`, `meta.n_ctx: 131072`, input modalities `text`+`image`.
+- `POST /v1/chat/completions` answers; `POST /v1/responses` answers too (the
+  API shape omp's `llama.cpp` provider uses — reasoning arrives as
+  `reasoning_text`). `GET /health` → 200; `GET /props`, `GET /slots` present.
+- omp 18.12.6, isolated agent dir, `.env` holding only
+  `LLAMA_CPP_BASE_URL=http://192.168.1.242:9931/v1`, completed both a plain
+  reply and a `bash` tool call as
+  `--model llama.cpp/qwen3.8-flash-next-abliterated-iq3_s`.
+- Keyless: the registry row uses `auth_method: "none"`, MAR writes no
+  credential, and `mar omp-sync` / `mar export` only add the endpoint env
+  line. `mar limits strata` probes `{endpoint}/models`.

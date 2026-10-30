@@ -92,6 +92,23 @@ def test_add_allows_oauth_without_key_and_default_model_none(tmp_path):
     assert reg.get("zai").auth_method == "oauth"
 
 
+def test_add_allows_keyless_none_auth(tmp_path):
+    """auth_method "none" stores a keyless subscription (self-hosted endpoints)."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub(provider="strata", auth_method="none", key=None, default_model=None))
+    stored = reg.get("strata")
+    assert stored.auth_method == "none"
+    assert stored.key is None
+
+
+def test_add_rejects_key_on_keyless_subscription(tmp_path):
+    """A keyless provider must not carry key material into the registry."""
+    reg = Registry(tmp_path / "registry.json")
+    with pytest.raises(RegistryError, match="keyless"):
+        reg.add(sub(provider="strata", auth_method="none", key=FAKE_KEY))
+    assert reg.all() == []
+
+
 def test_add_duplicate_provider(tmp_path):
     """add() refuses a second subscription for the same provider."""
     reg = Registry(tmp_path / "registry.json")

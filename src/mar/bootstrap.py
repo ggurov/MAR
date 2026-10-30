@@ -54,9 +54,24 @@ def _display_name(provider_id: str) -> str:
 
 
 def _subscription_line(sub: Subscription) -> str:
-    """Render one ``- id (display) — default model: m|none`` bullet."""
+    """Render one ``- id (display) — default model: m|none`` bullet.
+
+    Self-hosted entries append their endpoint and the omp model reference a
+    fresh install must use, so the prompt is copy-pasteable without MAR
+    looking the catalog up again.
+    """
     model = sub.default_model if sub.default_model else "none"
-    return f"- {sub.provider} ({_display_name(sub.provider)}) — default model: {model}"
+    line = f"- {sub.provider} ({_display_name(sub.provider)}) — default model: {model}"
+    try:
+        provider = providers.get(sub.provider)
+    except KeyError:
+        return line
+    if not provider.base_url:
+        return line
+    line += f" — endpoint: {provider.base_url}"
+    if sub.default_model and provider.omp_provider_id:
+        line += f" (omp model: {provider.omp_provider_id}/{sub.default_model})"
+    return line
 
 
 def render_prompt(reg: Registry, *, custom_path: Path | None = None) -> str:
@@ -64,7 +79,8 @@ def render_prompt(reg: Registry, *, custom_path: Path | None = None) -> str:
 
     The prompt names MAR in a one-line header, lists every active
     subscription as ``- <provider id> (<display name>) — default model:
-    <model|none>``, and instructs omp to run ``mar omp-sync`` so keys reach
+    <model|none>`` (self-hosted entries also carry their endpoint and omp
+    model reference), and instructs omp to run ``mar omp-sync`` so keys reach
     omp through MAR. Key material never appears anywhere in the output. When
     ``custom_path`` points at an existing file, its full text is appended
     under a ``## Custom setup`` heading.
@@ -123,6 +139,15 @@ def _sync_one(sub: Subscription, agent_dir: Path) -> tuple[str | None, str | Non
         return None, "unknown provider"
     if not provider.omp_provider_id or not provider.verified:
         return None, "omp provider id unverified"
+    if provider.base_url and provider.omp_base_url_env_var:
+        try:
+            omp.upsert_env_key(
+                agent_dir, provider.omp_base_url_env_var, provider.base_url
+            )
+        except omp.OmpError as exc:
+            return None, str(exc)
+        if sub.auth_method == "none":
+            return provider.omp_provider_id, None
     if sub.auth_method != "api_key" or not sub.key:
         return None, "no api key"
     try:
@@ -141,17 +166,23 @@ def sync(
     agent_dir: Path | None = None,
     roles: dict[str, str] | None = None,
 ) -> SyncReport:
-    """Write active api_key credentials into omp and apply model roles.
+    """Write active credentials and endpoints into omp, then standardize its display.
 
     For every active subscription the catalog entry is resolved; entries with
     an empty or unverified omp provider id, unknown providers, and
-    subscriptions without an api key are skipped and reported. Catalog
-    entries with an ``omp_env_var`` are written to the agent dir's ``.env``
-    (environment fallback), all others as login-style rows in omp's
-    ``agent.db``. An ``OmpError`` from one provider is reported as a skip
-    for that provider only; the remaining providers are still written.
-    Afterwards, each ``roles`` entry is applied via ``set_model_role``
-    (errors propagate — roles are a single all-or-nothing config.yml).
+    subscriptions without an api key are skipped and reported. Catalog entries
+    with a ``base_url`` first get their endpoint written to the agent dir's
+    ``.env`` under ``omp_base_url_env_var`` (omp's documented route for
+    self-hosted engines); keyless ones are done there, keyed ones then store
+    their api_key. Catalog entries with an ``omp_env_var`` are written to the
+    agent dir's ``.env`` (environment fallback), all others as login-style
+    rows in omp's ``agent.db``. An ``OmpError`` from one provider is reported
+    as a skip for that provider only; the remaining providers are still
+    written.
+    Afterwards, each ``roles`` entry is applied via ``set_model_role``, the
+    fixed :func:`omp.standard_status_line` segments replace any cloned ones,
+    and the ``provider/api-id`` status-line extension is installed (errors
+    propagate — these are single all-or-nothing config writes).
 
     Args:
         reg: Registry to sync from; only active subscriptions are used.
@@ -163,7 +194,8 @@ def sync(
         A :class:`SyncReport` listing written omp ids and skip reasons.
 
     Raises:
-        omp.OmpError: If applying a model role fails.
+        omp.OmpError: If applying a model role, the status line, or the
+            status-line extension fails.
     """
     target = Path(agent_dir) if agent_dir is not None else omp.default_agent_dir()
     written: list[str] = []
@@ -177,4 +209,6 @@ def sync(
     if roles:
         for role, model in roles.items():
             omp.set_model_role(target, role, model)
+    omp.write_status_line(target)
+    omp.write_status_line_extension(target)
     return SyncReport(written=tuple(written), skipped=tuple(skipped))
