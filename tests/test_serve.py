@@ -57,6 +57,11 @@ class TestRenderConfig:
         assert "ZAI_API_KEY" not in body_before
         assert "ZAI_API_KEY" in body_after
 
+    def test_memory_defaults_to_global_hindsight(self, registry_path):
+        body = serve.render_config(registry_path, "bash")
+        assert "omp config set memory.backend hindsight" in body
+        assert f"omp config set hindsight.apiUrl {cli.DEFAULT_GLOBAL_MEMORY_URL}" in body
+
     def test_memory_off_emits_no_memory_config(self, registry_path):
         body = serve.render_config(registry_path, "bash", memory="off")
         assert "omp config set memory.backend off" in body
