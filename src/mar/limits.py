@@ -279,7 +279,7 @@ def _fetch_strata(key: str, timeout: float) -> LimitSnapshot:
 
     Returns:
         LimitSnapshot with no items and a ``note`` of the form
-        ``up: 1 model · <id> · 131072 ctx · text+image``; ``source="api"``.
+        ``up: 1 model · <id> · 1048576 ctx · text``; ``source="api"``.
 
     Raises:
         LimitError: On HTTP/connection/timeout failures, malformed JSON, a

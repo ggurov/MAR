@@ -96,7 +96,7 @@ EXPORT_KEY_ENV_VARS = {
 URL_FIELDS = ("key_url", "limits_url", "signup_url")
 
 # Self-hosted endpoints are plain HTTP on the LAN: (base_url, env route).
-BASE_URLS = {"strata": ("http://192.168.1.242:9931/v1", "LLAMA_CPP_BASE_URL")}
+BASE_URLS = {"strata": ("http://192.168.1.203:8080/v1", "LLAMA_CPP_BASE_URL")}
 
 AUTH_METHODS = {pid: ("api_key",) for pid in EXPECTED_IDS}
 AUTH_METHODS["strata"] = ("none",)
@@ -242,12 +242,12 @@ TAMPER_CASES = [
         id="bad-env-var-shape",
     ),
     pytest.param(
-        dataclasses.replace(BASE, base_url="ftp://192.168.1.242:9931/v1"),
+        dataclasses.replace(BASE, base_url="ftp://192.168.1.203:8080/v1"),
         "base_url must start with http:// or https://",
         id="bad-base-url-scheme",
     ),
     pytest.param(
-        dataclasses.replace(BASE, base_url="http://192.168.1.242:9931/v1"),
+        dataclasses.replace(BASE, base_url="http://192.168.1.203:8080/v1"),
         "base_url requires omp_base_url_env_var",
         id="base-url-without-env-route",
     ),

@@ -68,18 +68,18 @@ def test_supported_lists_api_kind_ids_in_catalog_order():
     assert supported() == ["openrouter", "gemini", "strata"]
     assert supported() == [p.id for p in CATALOG if p.limits_kind == "api"]
 
-STRATA_URL = "http://192.168.1.242:9931/v1"
-STRATA_MODEL = "qwen3.8-flash-next-abliterated-iq3_s"
+STRATA_URL = "http://192.168.1.203:8080/v1"
+STRATA_MODEL = "deepseek-v4.1-flash"
 
 
-def _strata_model(model_id: str = STRATA_MODEL, ctx: int = 131072) -> dict:
+def _strata_model(model_id: str = STRATA_MODEL, ctx: int = 1048576) -> dict:
     return {
         "id": model_id,
         "object": "model",
         "status": {"value": "loaded"},
         "meta": {"n_ctx": ctx},
         "architecture": {
-            "input_modalities": ["text", "image"],
+            "input_modalities": ["text"],
             "output_modalities": ["text"],
         },
     }
@@ -106,7 +106,7 @@ def test_fetch_strata_probes_the_catalog_endpoint_without_a_key(monkeypatch):
     assert snapshot.provider == "strata"
     assert snapshot.source == "api"
     assert snapshot.items == ()
-    assert snapshot.note == f"up: 1 model \u00b7 {STRATA_MODEL} \u00b7 131072 ctx \u00b7 text+image"
+    assert snapshot.note == f"up: 1 model \u00b7 {STRATA_MODEL} \u00b7 1048576 ctx \u00b7 text"
 
 
 def test_fetch_strata_counts_every_served_model(monkeypatch):
