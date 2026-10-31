@@ -494,8 +494,8 @@ class TestServicesSnapshot:
                 "provider": "strata",
                 "auth_method": "none",
                 "key": None,
-                "models": ["qwen3.8-flash-next-abliterated-iq3_s"],
-                "default_model": "qwen3.8-flash-next-abliterated-iq3_s",
+                "models": ["deepseek-v4.1-flash"],
+                "default_model": "deepseek-v4.1-flash",
                 "added_at": "2026-10-23T00:00:00+00:00",
                 "status": "active",
                 "notes": "",
@@ -510,7 +510,7 @@ class TestServicesSnapshot:
                 fetched_at="2026-10-23T00:00:00+00:00",
                 items=(),
                 source="api",
-                note="up: 1 model \u00b7 qwen3.8-flash-next-abliterated-iq3_s",
+                note="up: 1 model \u00b7 deepseek-v4.1-flash",
             )
 
         monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
@@ -521,8 +521,8 @@ class TestServicesSnapshot:
             r for r in serve.services_snapshot(registry_path) if r["provider"] == "strata"
         )
         assert ("strata", "") in calls
-        assert row["usage"] == "up: 1 model \u00b7 qwen3.8-flash-next-abliterated-iq3_s"
-        assert row["endpoint"] == "http://192.168.1.242:9931/v1"
+        assert row["usage"] == "up: 1 model \u00b7 deepseek-v4.1-flash"
+        assert row["endpoint"] == "http://192.168.1.203:8080/v1"
         assert row["limits_url"] == ""
 
 
@@ -608,8 +608,8 @@ class TestIndexHtml:
                 "provider": "strata",
                 "auth_method": "none",
                 "key": None,
-                "models": ["qwen3.8-flash-next-abliterated-iq3_s"],
-                "default_model": "qwen3.8-flash-next-abliterated-iq3_s",
+                "models": ["deepseek-v4.1-flash"],
+                "default_model": "deepseek-v4.1-flash",
                 "added_at": "2026-10-23T00:00:00+00:00",
                 "status": "active",
                 "notes": "",
@@ -625,7 +625,7 @@ class TestIndexHtml:
         monkeypatch.setattr(serve, "_run_omp_usage", dict)
         html = serve.render_index_html("localhost:8930", registry_path)
         assert (
-            '<a href="http://192.168.1.242:9931/v1" target="_blank"'
+            '<a href="http://192.168.1.203:8080/v1" target="_blank"'
             ' rel="noopener"><b>strata</b></a>' in html
         )
 

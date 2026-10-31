@@ -326,13 +326,12 @@ CATALOG: tuple[Provider, ...] = (
         notes=(
             "Self-hosted llama.cpp server on the LAN; keyless, so MAR writes "
             "no credential — only the endpoint (LLAMA_CPP_BASE_URL). Probed "
-            "live 2026-10-23: GET /v1/models reports "
-            "qwen3.8-flash-next-abliterated-iq3_s (n_ctx 131072, "
-            "input text+image); POST /v1/chat/completions and "
-            "POST /v1/responses answer; omp 18.12.6 completed a tool call "
-            "through it as llama.cpp/qwen3.8-flash-next-abliterated-iq3_s."),
+            "live 2026-10-31: GET /v1/models reports deepseek-v4.1-flash "
+            "(n_ctx 1048576, input text); POST /v1/chat/completions and "
+            "POST /v1/responses answer; omp completed plain replies and a "
+            "bash tool call through it as llama.cpp/deepseek-v4.1-flash."),
         omp_base_url_env_var="LLAMA_CPP_BASE_URL",
-        base_url="http://192.168.1.242:9931/v1",
+        base_url="http://192.168.1.203:8080/v1",
     ),
 )
 

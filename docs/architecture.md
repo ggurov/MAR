@@ -139,19 +139,19 @@ limits_kind, verified, notes, omp_base_url_env_var, base_url`
 - `validate()` returns a list of problem strings; tests assert it is empty for
   the shipped catalog.
 
-**verified 2026-10-23** — self-hosted engine route. `strata` is a keyless
-llama.cpp server on the LAN (`http://192.168.1.242:9931/v1`). omp 18.12.6
-discovers that engine implicitly as provider id `llama.cpp`, reading the
-endpoint from `LLAMA_CPP_BASE_URL` (agent `.env` works; verified live) and
-speaking the Responses API (`POST /v1/responses` answers; the server also
-serves `POST /v1/chat/completions`, `GET /v1/models`, `GET /props`, `GET
-/slots`; tool calls complete end to end). MAR therefore stores a subscription
-with `auth_method="none"`, writes no credential, and puts
+**verified 2026-10-31** — self-hosted engine route. `strata` is a keyless
+llama.cpp server on the LAN (`http://192.168.1.203:8080/v1`). omp discovers
+that engine implicitly as provider id `llama.cpp`, reading the endpoint from
+`LLAMA_CPP_BASE_URL` (agent `.env` works; verified live) and speaking the
+Responses API (`POST /v1/responses` answers; the server also serves `POST
+/v1/chat/completions`, `GET /v1/models`, `GET /props`, `GET /slots`; tool
+calls complete end to end). MAR therefore stores a subscription with
+`auth_method="none"`, writes no credential, and puts
 `LLAMA_CPP_BASE_URL=<base_url>` in `.env` on sync/export. The omp model
-reference is `llama.cpp/<model id>`; omp's discovery fills context window
-(`meta.n_ctx` = 131072) and input modalities from the server, and
-`mar limits strata` probes `{base_url}/models` (a LAN endpoint, not a web
-page — the one fetcher that talks plain `http://` by design).
+reference is `llama.cpp/<model id>` (`deepseek-v4.1-flash`); omp's discovery
+fills context window (`meta.n_ctx` = 1048576) and input modalities from the
+server, and `mar limits strata` probes `{base_url}/models` (a LAN endpoint,
+not a web page — the one fetcher that talks plain `http://` by design).
 
 ## Limits
 
