@@ -367,7 +367,7 @@ def ids() -> tuple[str, ...]:
     """Return the catalog ids in their fixed, documented order.
 
     Returns:
-        Tuple of provider ids, exactly the 13 lines of docs/providers.md.
+        Tuple of provider ids, exactly the 14 lines of docs/providers.md.
     """
     return tuple(provider.id for provider in CATALOG)
 
