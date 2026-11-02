@@ -151,6 +151,20 @@ def test_prompt_local_endpoint_carries_url_and_omp_model_ref(tmp_path: Path) -> 
         f"(omp model: llama.cpp/{model})"
     ) in prompt
 
+
+def test_prompt_second_local_endpoint_uses_lm_studio_ref(tmp_path: Path) -> None:
+    model = "qwen3.8-flash-next-abliterated-iq3_s"
+    reg = _registry(
+        tmp_path, [_sub("qwen", auth_method="none", key=None, model=model)]
+    )
+    prompt = render_prompt(reg)
+    assert (
+        f"- qwen (Qwen (local llama.cpp)) — default model: {model} — "
+        f"endpoint: http://qwen.nj02.gurov.us/v1 "
+        f"(omp model: lm-studio/{model})"
+    ) in prompt
+
+
 # ------------------------------------------------------------------------ sync
 
 
@@ -196,6 +210,20 @@ def test_sync_writes_base_url_env_for_keyless_local_endpoint(tmp_path: Path) -> 
     content = (agent_dir / ".env").read_text(encoding="utf-8")
     assert content == "LLAMA_CPP_BASE_URL=http://192.168.1.203:8080/v1\n"
     assert not (agent_dir / "agent.db").exists()
+
+
+def test_sync_writes_base_url_env_for_second_local_endpoint(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    model = "qwen3.8-flash-next-abliterated-iq3_s"
+    reg = _registry(
+        tmp_path, [_sub("qwen", auth_method="none", key=None, model=model)]
+    )
+
+    report = sync(reg, agent_dir=agent_dir)
+
+    assert report == SyncReport(written=("lm-studio",), skipped=())
+    content = (agent_dir / ".env").read_text(encoding="utf-8")
+    assert content == "LM_STUDIO_BASE_URL=http://qwen.nj02.gurov.us/v1\n"
 
 
 def test_sync_rewrites_existing_base_url_in_place(tmp_path: Path) -> None:

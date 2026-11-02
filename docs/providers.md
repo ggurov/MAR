@@ -1,16 +1,16 @@
 # Provider catalog data
 
-The 13 lines below are the user's subscriptions (problem statement minus
+The 14 lines below are the user's subscriptions (problem statement minus
 codebuddy, dropped by the user; plus `jev`, the Typesafe judge model that
-backs omp's `modelRoles.judge`; plus `gemini`, `commandcode`, and `strata`, the
-user's self-hosted llama.cpp box). Editorial source for
-`src/mar/providers.py`; keep both in sync.
+backs omp's `modelRoles.judge`; plus `gemini` and `commandcode`; plus the
+user's two self-hosted llama.cpp boxes, `strata` and `qwen`). Editorial
+source for `src/mar/providers.py`; keep both in sync.
 
 Verification: every omp id/env var below was confirmed against omp's official
 provider roster (omp://providers.md, 2026-10-10); `cline`, `opencode`, `zai`
-ids were additionally observed live in `~/.omp/agent/agent.db`; `strata` was
-probed live on its LAN endpoint (2026-10-23). All thirteen are
-`verified=True`; `unverified()` returns empty.
+ids were additionally observed live in `~/.omp/agent/agent.db`; `strata` and
+`qwen` were probed live on their LAN endpoints (2026-10-23 through
+2026-11-02). All fourteen are `verified=True`; `unverified()` returns empty.
 
 | # | id | display | omp_provider_id | credential route | key_url | limits_url | limits_kind |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -27,6 +27,7 @@ probed live on its LAN endpoint (2026-10-23). All thirteen are
 | 11 | gemini | Google Gemini | google | env `GEMINI_API_KEY` | https://aistudio.google.com/api/keys | https://aistudio.google.com/usage | manual |
 | 12 | commandcode | Command Code | commandcode | env `COMMAND_CODE_API_KEY` | https://commandcode.ai | https://commandcode.ai/settings/usage | manual |
 | 13 | strata | Strata (local llama.cpp) | llama.cpp | env `LLAMA_CPP_BASE_URL` (endpoint; no key) | — | `{endpoint}/models` probe | api |
+| 14 | qwen | Qwen (local llama.cpp) | lm-studio | env `LM_STUDIO_BASE_URL` (endpoint; no key) | — | `{endpoint}/models` probe | api |
 
 Notes:
 
@@ -71,3 +72,19 @@ Probed live 2026-10-31 at `http://192.168.1.203:8080/v1` (llama.cpp server):
 - Keyless: the registry row uses `auth_method: "none"`, MAR writes no
   credential, and `mar omp-sync` / `mar export` only add the endpoint env
   line. `mar limits strata` probes `{endpoint}/models`.
+
+## qwen (second self-hosted llama.cpp)
+
+Probed live 2026-11-02 at `http://qwen.nj02.gurov.us/v1`:
+
+- `GET /v1/models` → one model, `qwen3.8-flash-next-abliterated-iq3_s`,
+  `status.value: loaded`, `meta.n_ctx: 65536`, input modality `text`.
+- `POST /v1/chat/completions` answers (`ok-qwen`); `POST /v1/responses`
+  answers 200; `GET /health` → 200.
+- omp has no second `llama.cpp` slot, so MAR maps this box to omp's built-in
+  OpenAI-compatible `lm-studio` provider: `LM_STUDIO_BASE_URL` is the env
+  route and the model ref is
+  `lm-studio/qwen3.8-flash-next-abliterated-iq3_s`. Verified live in an
+  isolated agent dir (plain reply) and via `omp models lm-studio`.
+- Keyless and probed by `mar limits qwen`; `omp-sync`/`export` add only the
+  endpoint env line.

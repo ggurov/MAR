@@ -1,4 +1,4 @@
-"""Static catalog of the user's 11 AI providers + integrity validation.
+"""Static catalog of the user's 14 AI providers + integrity validation.
 
 Editorial source: docs/providers.md (kept in sync with it). The catalog is the
 single place MAR learns provider facts from; it never invents defaults or
@@ -332,6 +332,33 @@ CATALOG: tuple[Provider, ...] = (
             "bash tool call through it as llama.cpp/deepseek-v4.1-flash."),
         omp_base_url_env_var="LLAMA_CPP_BASE_URL",
         base_url="http://192.168.1.203:8080/v1",
+    ),
+    Provider(
+        id="qwen",
+        display="Qwen (local llama.cpp)",
+        auth_methods=("none",),
+        key_url="",
+        limits_url="",
+        signup_url="",
+        omp_provider_id="lm-studio",
+        omp_env_var="",
+        export_env_var="",
+        export_oauth_env_var="",
+        default_model=None,
+        limits_kind="api",
+        verified=True,
+        notes=(
+            "Second self-hosted llama.cpp server on the LAN; keyless, so MAR "
+            "writes only the endpoint. omp reaches it through its built-in "
+            "OpenAI-compatible lm-studio provider (LM_STUDIO_BASE_URL). "
+            "Probed live 2026-11-02: GET /v1/models reports "
+            "qwen3.8-flash-next-abliterated-iq3_s (n_ctx 65536, input text); "
+            "POST /v1/chat/completions and POST /v1/responses answer; omp "
+            "completed a plain reply as "
+            "lm-studio/qwen3.8-flash-next-abliterated-iq3_s."
+        ),
+        omp_base_url_env_var="LM_STUDIO_BASE_URL",
+        base_url="http://qwen.nj02.gurov.us/v1",
     ),
 )
 

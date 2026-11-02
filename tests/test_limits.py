@@ -65,14 +65,16 @@ def raises_open(exc: Exception):
 def test_supported_lists_api_kind_ids_in_catalog_order():
     from mar.providers import CATALOG
 
-    assert supported() == ["openrouter", "gemini", "strata"]
+    assert supported() == ["openrouter", "gemini", "strata", "qwen"]
     assert supported() == [p.id for p in CATALOG if p.limits_kind == "api"]
 
 STRATA_URL = "http://192.168.1.203:8080/v1"
 STRATA_MODEL = "deepseek-v4.1-flash"
+QWEN_URL = "http://qwen.nj02.gurov.us/v1"
+QWEN_MODEL = "qwen3.8-flash-next-abliterated-iq3_s"
 
 
-def _strata_model(model_id: str = STRATA_MODEL, ctx: int = 1048576) -> dict:
+def _local_model(model_id: str, ctx: int = 1048576) -> dict:
     return {
         "id": model_id,
         "object": "model",
@@ -95,7 +97,7 @@ def test_fetch_strata_probes_the_catalog_endpoint_without_a_key(monkeypatch):
         captured["url"] = request.full_url
         captured["auth"] = request.get_header("Authorization")
         captured["timeout"] = timeout
-        return FakeResponse(json.dumps({"data": [_strata_model()]}).encode())
+        return FakeResponse(json.dumps({"data": [_local_model(STRATA_MODEL)]}).encode())
 
     monkeypatch.setattr(limits, "_open", fake_open)
     snapshot = fetch("strata", "", timeout=4.0)
@@ -110,9 +112,29 @@ def test_fetch_strata_probes_the_catalog_endpoint_without_a_key(monkeypatch):
 
 
 def test_fetch_strata_counts_every_served_model(monkeypatch):
-    payload = {"data": [_strata_model(), _strata_model("second-model", ctx=8192)]}
+    payload = {
+        "data": [_local_model(STRATA_MODEL), _local_model("second-model", ctx=8192)]
+    }
     monkeypatch.setattr(limits, "_open", _payload(payload))
     assert fetch("strata", "").note.startswith("up: 2 models \u00b7 ")
+
+
+def test_fetch_qwen_probes_its_own_endpoint(monkeypatch):
+    captured = {}
+
+    def fake_open(request, timeout):
+        captured["url"] = request.full_url
+        return FakeResponse(
+            json.dumps({"data": [_local_model(QWEN_MODEL, ctx=65536)]}).encode()
+        )
+
+    monkeypatch.setattr(limits, "_open", fake_open)
+    snapshot = fetch("qwen", "")
+
+    assert captured["url"] == f"{QWEN_URL}/models"
+    assert snapshot.provider == "qwen"
+    assert snapshot.source == "api"
+    assert snapshot.note == f"up: 1 model \u00b7 {QWEN_MODEL} \u00b7 65536 ctx \u00b7 text"
 
 
 STRATA_ERROR_CASES = [
