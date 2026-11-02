@@ -5,8 +5,9 @@ Dispatch is driven by the provider catalog's ``limits_kind``:
 - ``"api"`` -> :func:`fetch` calls the provider's documented usage endpoint
   and parses it into a :class:`LimitSnapshot` (``source="api"``). Shipped
   fetchers: OpenRouter ``GET https://openrouter.ai/api/v1/credits``, Gemini's
-  models list (key liveness), and the keyless self-hosted ``strata`` engine's
-  own ``{base_url}/models`` list — a LAN endpoint, not a web page.
+  models list (key liveness), and every keyless self-hosted llama.cpp
+  engine's own ``{base_url}/models`` list (``strata``, ``qwen``) — LAN
+  endpoints, not web pages.
 - ``"manual"`` -> :func:`manual_hint` returns the provider's catalog
   ``limits_url`` plus a one-line instruction; MAR never pretends to fetch
   what it cannot. Self-hosted entries name their probe command instead.
@@ -89,7 +90,8 @@ def supported() -> list[str]:
     """Return catalog ids that have a real fetcher (``limits_kind == "api"``).
 
     Returns:
-        Ids in fixed catalog order; ``["openrouter", "gemini", "strata"]``.
+        Ids in fixed catalog order: hosted fetchers plus every self-hosted
+        endpoint.
     """
     return [provider.id for provider in CATALOG if provider.limits_kind == "api"]
 
@@ -147,6 +149,8 @@ def fetch(provider_id: str, key: str, *, timeout: float = _DEFAULT_TIMEOUT) -> L
             f"({provider.limits_url}); no API fetch exists — "
             f"use limits.manual_hint({provider_id!r})"
         )
+    if provider.base_url:
+        return _fetch_local_endpoint(provider, key, timeout)
     fetcher = _FETCHERS.get(provider_id)
     if fetcher is None:
         raise LimitError(
@@ -264,39 +268,42 @@ def _fetch_gemini(key: str, timeout: float) -> LimitSnapshot:
     )
 
 
-def _fetch_strata(key: str, timeout: float) -> LimitSnapshot:
-    """Probe the self-hosted engine's own model list as a liveness snapshot.
+def _fetch_local_endpoint(
+    provider: Provider, key: str, timeout: float
+) -> LimitSnapshot:
+    """Probe a keyless self-hosted engine's own model list for liveness.
 
-    The catalog's ``base_url`` is a LAN llama.cpp server, so this is the one
-    fetcher that talks plain ``http://`` by design: ``GET {base_url}/models``
-    is llama.cpp's OpenAI-compatible list, and it carries the runtime fields
-    MAR reports (loaded model id, ``meta.n_ctx``, input modalities).
+    The catalog's ``base_url`` is a LAN llama.cpp server, so these fetchers
+    talk plain ``http://`` by design: ``GET {base_url}/models`` is
+    llama.cpp's OpenAI-compatible list, and it carries the runtime fields MAR
+    reports (loaded model id, ``meta.n_ctx``, input modalities).
 
     Args:
+        provider: Self-hosted catalog entry carrying ``base_url``.
         key: Unused — the endpoint is keyless; accepted to match the
             fetcher signature and never sent anywhere.
         timeout: Request timeout in seconds.
 
     Returns:
-        LimitSnapshot with no items and a ``note`` of the form
-        ``up: 1 model · <id> · 1048576 ctx · text``; ``source="api"``.
+        LimitSnapshot for ``provider.id`` with no items and a ``note`` of
+        the form ``up: 1 model · <id> · 1048576 ctx · text``; ``source="api"``.
 
     Raises:
         LimitError: On HTTP/connection/timeout failures, malformed JSON, a
             missing/non-list ``data``, or a list with no model id. The
-            message names the endpoint family, never a key.
+            message names the provider and endpoint family, never a key.
     """
-    provider = _lookup("strata")
     models_url = f"{provider.base_url.rstrip('/')}/models"
     request = urllib.request.Request(models_url, method="GET")
-    payload = _read_json(request, timeout, api_name="strata models API")
+    api_name = f"{provider.id} models API"
+    payload = _read_json(request, timeout, api_name=api_name)
     data = payload.get("data")
     if not isinstance(data, list):
-        raise LimitError("strata models API response is missing the 'data' list")
+        raise LimitError(f"{api_name} response is missing the 'data' list")
     models = [entry for entry in data if isinstance(entry, dict) and entry.get("id")]
     if not models:
         raise LimitError(
-            f"strata models API lists no loaded model at {provider.base_url}"
+            f"{api_name} lists no loaded model at {provider.base_url}"
         )
     first = models[0]
     parts = [f"{len(models)} model" + ("" if len(models) == 1 else "s"), str(first["id"])]
@@ -311,17 +318,17 @@ def _fetch_strata(key: str, timeout: float) -> LimitSnapshot:
         if labels:
             parts.append("+".join(labels))
     return LimitSnapshot(
-        provider="strata",
+        provider=provider.id,
         fetched_at=_now_iso(),
         items=(),
         source="api",
         note="up: " + " \u00b7 ".join(parts),
     )
 
+
 _FETCHERS: dict[str, Callable[[str, float], LimitSnapshot]] = {
     "openrouter": _fetch_openrouter,
     "gemini": _fetch_gemini,
-    "strata": _fetch_strata,
 }
 
 

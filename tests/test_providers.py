@@ -1,9 +1,10 @@
 """Tests for the static provider catalog (M2).
 
-The catalog must mirror docs/providers.md exactly: 13 providers, fixed order,
-verification flags confirmed against omp's provider roster (2026-10-10) and a
-live LAN llama.cpp probe (2026-10-23). Validation rules are exercised by
-tampering with copies of catalog entries (the shipped CATALOG is frozen).
+The catalog must mirror docs/providers.md exactly: 14 providers, fixed order,
+verification flags confirmed against omp's provider roster (2026-10-10) and
+live LAN llama.cpp probes (2026-10-23 through 2026-11-02). Validation rules
+are exercised by tampering with copies of catalog entries (the shipped
+CATALOG is frozen).
 """
 
 import dataclasses
@@ -26,6 +27,7 @@ EXPECTED_IDS = (
     "gemini",
     "commandcode",
     "strata",
+    "qwen",
 )
 
 UNVERIFIED_IDS: set[str] = set()
@@ -43,6 +45,7 @@ OMP_IDS = {
     "antigravity": "google-antigravity",
     "copilot": "github-copilot",
     "strata": "llama.cpp",
+    "qwen": "lm-studio",
 }
 
 ENV_VARS = {
@@ -59,6 +62,7 @@ ENV_VARS = {
     "gemini": "GEMINI_API_KEY",
     "commandcode": "COMMAND_CODE_API_KEY",
     "strata": "",
+    "qwen": "",
 }
 
 OAUTH_ENV_VARS = {
@@ -75,6 +79,7 @@ OAUTH_ENV_VARS = {
     "gemini": "",
     "commandcode": "",
     "strata": "",
+    "qwen": "",
 }
 
 EXPORT_KEY_ENV_VARS = {
@@ -91,21 +96,26 @@ EXPORT_KEY_ENV_VARS = {
     "gemini": "GEMINI_API_KEY",
     "commandcode": "COMMAND_CODE_API_KEY",
     "strata": "",
+    "qwen": "",
 }
 
 URL_FIELDS = ("key_url", "limits_url", "signup_url")
 
 # Self-hosted endpoints are plain HTTP on the LAN: (base_url, env route).
-BASE_URLS = {"strata": ("http://192.168.1.203:8080/v1", "LLAMA_CPP_BASE_URL")}
+BASE_URLS = {
+    "strata": ("http://192.168.1.203:8080/v1", "LLAMA_CPP_BASE_URL"),
+    "qwen": ("http://qwen.nj02.gurov.us/v1", "LM_STUDIO_BASE_URL"),
+}
 
 AUTH_METHODS = {pid: ("api_key",) for pid in EXPECTED_IDS}
 AUTH_METHODS["strata"] = ("none",)
+AUTH_METHODS["qwen"] = ("none",)
 
 
 def test_ids_returns_exact_catalog_in_order():
     assert ids() == EXPECTED_IDS
     assert tuple(p.id for p in CATALOG) == EXPECTED_IDS
-    assert len(CATALOG) == 13
+    assert len(CATALOG) == 14
 
 
 def test_get_returns_matching_provider():
@@ -141,7 +151,7 @@ def test_unverified_is_empty_every_entry_confirmed():
     assert all(p.verified for p in CATALOG)
 
 
-def test_verified_are_all_thirteen_confirmed_providers():
+def test_verified_are_all_fourteen_confirmed_providers():
     assert {p.id for p in CATALOG if p.verified} == VERIFIED_IDS
 
 
@@ -165,9 +175,14 @@ def test_export_key_env_vars_match_official_roster(provider_id, env_var):
     assert get(provider_id).export_env_var == env_var
 
 
-def test_limits_kind_api_providers_are_openrouter_and_gemini():
+def test_limits_kind_api_providers_include_both_local_endpoints():
     api_providers = [p for p in CATALOG if p.limits_kind == "api"]
-    assert [p.id for p in api_providers] == ["openrouter", "gemini", "strata"]
+    assert [p.id for p in api_providers] == [
+        "openrouter",
+        "gemini",
+        "strata",
+        "qwen",
+    ]
     manual = [p.id for p in CATALOG if p.limits_kind == "manual"]
     assert "gemini" not in manual
 
@@ -184,8 +199,8 @@ def test_local_endpoint_base_urls_and_env_routes(provider_id, base_url):
     assert (provider.base_url, provider.omp_base_url_env_var) == base_url
 
 
-def test_only_the_self_hosted_entry_carries_a_base_url():
-    assert [p.id for p in CATALOG if p.base_url] == ["strata"]
+def test_only_self_hosted_entries_carry_a_base_url():
+    assert [p.id for p in CATALOG if p.base_url] == ["strata", "qwen"]
 
 
 def test_strata_is_keyless_with_no_web_pages():
@@ -196,6 +211,17 @@ def test_strata_is_keyless_with_no_web_pages():
     assert strata.limits_kind == "api"
     assert (strata.key_url, strata.limits_url, strata.signup_url) == ("", "", "")
     assert strata.export_env_var == "" and strata.omp_env_var == ""
+
+
+def test_qwen_is_keyless_on_the_lm_studio_route():
+    qwen = get("qwen")
+    assert qwen.auth_methods == ("none",)
+    assert qwen.verified is True
+    assert qwen.omp_provider_id == "lm-studio"
+    assert qwen.limits_kind == "api"
+    assert (qwen.key_url, qwen.limits_url, qwen.signup_url) == ("", "", "")
+    assert qwen.export_env_var == "" and qwen.omp_env_var == ""
+    assert qwen.omp_base_url_env_var == "LM_STUDIO_BASE_URL"
 
 
 BASE = CATALOG[0]

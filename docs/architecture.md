@@ -151,7 +151,13 @@ calls complete end to end). MAR therefore stores a subscription with
 reference is `llama.cpp/<model id>` (`deepseek-v4.1-flash`); omp's discovery
 fills context window (`meta.n_ctx` = 1048576) and input modalities from the
 server, and `mar limits strata` probes `{base_url}/models` (a LAN endpoint,
-not a web page — the one fetcher that talks plain `http://` by design).
+not a web page — the fetchers that talk plain `http://` by design).
+
+A second keyless server (`qwen`, `http://qwen.nj02.gurov.us/v1`, verified
+2026-11-02) uses omp's other built-in local route: provider id `lm-studio`
+with `LM_STUDIO_BASE_URL`, model ref `lm-studio/<model id>`. omp supports one
+endpoint per built-in local provider, so each LAN engine needs its own route;
+both use the same generic `{base_url}/models` limits probe.
 
 ## Limits
 

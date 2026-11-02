@@ -308,12 +308,14 @@ class TestExport:
         assert "<<'MAR_EOF'" in out
         assert "OPENROUTER_API_KEY=or-key-123456789012" in out
 
-    def test_export_carries_local_endpoint_base_url(self, reg_path, capsys):
+    def test_export_carries_local_endpoint_base_urls(self, reg_path, capsys):
         run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash")
+        run(reg_path, "add", "qwen", "--default", "qwen3.8-flash-next-abliterated-iq3_s")
         capsys.readouterr()
         assert run(reg_path, "export", "--shell", "bash") == 0
         out = capsys.readouterr().out
         assert "LLAMA_CPP_BASE_URL=http://192.168.1.203:8080/v1" in out
+        assert "LM_STUDIO_BASE_URL=http://qwen.nj02.gurov.us/v1" in out
 
     def test_export_redact_keeps_base_url_plain(self, reg_path, capsys):
         run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash")
@@ -433,7 +435,7 @@ class TestExport:
         agent_dir = tmp_path / "iso-agent"
         agent_dir.mkdir()
         (agent_dir / ".env").write_text(
-            "LM_STUDIO_BASE_URL=http://192.168.1.242:1234/v1\n"
+            "OLLAMA_BASE_URL=http://192.168.1.242:1234/v1\n"
             "OPENROUTER_API_KEY=stale-local-key-123456789\n"
             "# comment\n"
             "export ZAI_API_KEY=stale-zai-123456789012\n",
@@ -444,11 +446,11 @@ class TestExport:
         assert run(reg_path, "export") == 0
         captured = capsys.readouterr()
         out = captured.out
-        assert "LM_STUDIO_BASE_URL=http://192.168.1.242:1234/v1" in out
+        assert "OLLAMA_BASE_URL=http://192.168.1.242:1234/v1" in out
         assert "stale-local-key" not in out  # provider vars never pass through
         assert "stale-zai" not in out
         assert "ZAI_API_KEY=zai-key-1234567890" in out  # registry is authoritative
-        assert "carried local env override(s): LM_STUDIO_BASE_URL" in captured.err
+        assert "carried local env override(s): OLLAMA_BASE_URL" in captured.err
 
     def test_export_bash_carries_edit_standard_statusline_and_path(
         self, reg_path, tmp_path, capsys
