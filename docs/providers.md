@@ -58,28 +58,31 @@ Notes:
 
 ## strata (self-hosted llama.cpp)
 
-Probed live 2026-10-31 at `http://192.168.1.203:8080/v1` (llama.cpp server):
+Probed live 2026-11-07 at `http://deepseek.nj02.gurov.us/v1` (llama.cpp
+server; moved off the retired `http://192.168.1.203:8080/v1`):
 
-- `GET /v1/models` → one model, `deepseek-v4.1-flash`,
+- `GET /v1/models` → one model, `deepseek-v4.1-flash-1017-xq-v4`,
   `status.value: loaded`, `meta.n_ctx: 1048576`, input modality `text`.
 - `POST /v1/chat/completions` answers; `POST /v1/responses` answers too (the
   API shape omp's `llama.cpp` provider uses — reasoning arrives as
-  `reasoning_text`). `GET /health` → 200; `GET /props`, `GET /slots` present.
+  `reasoning_text`). `GET /health` → 200.
 - omp, isolated agent dir, `.env` holding only
-  `LLAMA_CPP_BASE_URL=http://192.168.1.203:8080/v1`, completed both a plain
-  reply and a `bash` tool call as
-  `--model llama.cpp/deepseek-v4.1-flash`.
+  `LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1`, completed both a
+  plain reply and a `bash` tool call as `--model
+  llama.cpp/deepseek-v4.1-flash-1017-xq-v4`.
 - Keyless: the registry row uses `auth_method: "none"`, MAR writes no
   credential, and `mar omp-sync` / `mar export` only add the endpoint env
   line. `mar limits strata` probes `{endpoint}/models`.
 
 ## qwen (second self-hosted llama.cpp)
 
-Probed live 2026-11-02 at `http://qwen.nj02.gurov.us/v1`:
+Probed live 2026-11-07 at `http://qwen2.nj02.gurov.us/v1` (the old
+`http://qwen.nj02.gurov.us/v1` name now resolves to a Strata server and is
+rejected by its DNS-rebinding guard):
 
 - `GET /v1/models` → one model, `qwen3.8-flash-next-abliterated-iq3_s`,
-  `status.value: loaded`, `meta.n_ctx: 65536`, input modality `text`.
-- `POST /v1/chat/completions` answers (`ok-qwen`); `POST /v1/responses`
+  `status.value: loaded`, `meta.n_ctx: 1048576`, input modality `text`.
+- `POST /v1/chat/completions` answers (`ok`); `POST /v1/responses`
   answers 200; `GET /health` → 200.
 - omp has no second `llama.cpp` slot, so MAR maps this box to omp's built-in
   OpenAI-compatible `lm-studio` provider: `LM_STUDIO_BASE_URL` is the env

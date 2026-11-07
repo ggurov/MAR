@@ -56,7 +56,7 @@ class TestAdd:
         assert run(reg_path, "add", "zai") == 1
 
     def test_add_keyless_provider_needs_no_key(self, reg_path, capsys):
-        model = "deepseek-v4.1-flash"
+        model = "deepseek-v4.1-flash-1017-xq-v4"
         assert run(reg_path, "add", "strata", "--default", model) == 0
         sub = json.loads(reg_path.read_text(encoding="utf-8"))["subscriptions"][0]
         assert (sub["provider"], sub["auth_method"], sub["key"]) == ("strata", "none", None)
@@ -168,7 +168,7 @@ class TestLimits:
     def test_limits_keyless_local_endpoint_probes_its_models_list(
         self, reg_path, monkeypatch, capsys
     ):
-        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash")
+        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
         capsys.readouterr()
         seen = {}
 
@@ -186,7 +186,7 @@ class TestLimits:
                     {
                         "data": [
                             {
-                                "id": "deepseek-v4.1-flash",
+                                "id": "deepseek-v4.1-flash-1017-xq-v4",
                                 "meta": {"n_ctx": 1048576},
                                 "architecture": {
                                     "input_modalities": ["text"],
@@ -204,9 +204,9 @@ class TestLimits:
         monkeypatch.setattr("mar.limits._open", fake_open)
         assert run(reg_path, "limits", "strata") == 0
         out = capsys.readouterr().out
-        assert seen["url"] == "http://192.168.1.203:8080/v1/models"
+        assert seen["url"] == "http://deepseek.nj02.gurov.us/v1/models"
         assert "strata (api):" in out
-        assert "up: 1 model \u00b7 deepseek-v4.1-flash" in out
+        assert "up: 1 model \u00b7 deepseek-v4.1-flash-1017-xq-v4" in out
         assert "1048576 ctx" in out
 
 
@@ -309,21 +309,21 @@ class TestExport:
         assert "OPENROUTER_API_KEY=or-key-123456789012" in out
 
     def test_export_carries_local_endpoint_base_urls(self, reg_path, capsys):
-        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash")
+        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
         run(reg_path, "add", "qwen", "--default", "qwen3.8-flash-next-abliterated-iq3_s")
         capsys.readouterr()
         assert run(reg_path, "export", "--shell", "bash") == 0
         out = capsys.readouterr().out
-        assert "LLAMA_CPP_BASE_URL=http://192.168.1.203:8080/v1" in out
-        assert "LM_STUDIO_BASE_URL=http://qwen.nj02.gurov.us/v1" in out
+        assert "LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1" in out
+        assert "LM_STUDIO_BASE_URL=http://qwen2.nj02.gurov.us/v1" in out
 
     def test_export_redact_keeps_base_url_plain(self, reg_path, capsys):
-        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash")
+        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         capsys.readouterr()
         assert run(reg_path, "export", "--redact", "--shell", "bash") == 0
         out = capsys.readouterr().out
-        assert "LLAMA_CPP_BASE_URL=http://192.168.1.203:8080/v1" in out
+        assert "LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1" in out
         assert "zai-key-1234567890" not in out
         assert "ZAI_API_KEY=zai-...7890" in out
 
