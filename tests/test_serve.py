@@ -494,8 +494,8 @@ class TestServicesSnapshot:
                 "provider": "strata",
                 "auth_method": "none",
                 "key": None,
-                "models": ["deepseek-v4.1-flash"],
-                "default_model": "deepseek-v4.1-flash",
+                "models": ["deepseek-v4.1-flash-1017-xq-v4"],
+                "default_model": "deepseek-v4.1-flash-1017-xq-v4",
                 "added_at": "2026-10-23T00:00:00+00:00",
                 "status": "active",
                 "notes": "",
@@ -510,7 +510,7 @@ class TestServicesSnapshot:
                 fetched_at="2026-10-23T00:00:00+00:00",
                 items=(),
                 source="api",
-                note="up: 1 model \u00b7 deepseek-v4.1-flash",
+                note="up: 1 model \u00b7 deepseek-v4.1-flash-1017-xq-v4",
             )
 
         monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
@@ -521,8 +521,8 @@ class TestServicesSnapshot:
             r for r in serve.services_snapshot(registry_path) if r["provider"] == "strata"
         )
         assert ("strata", "") in calls
-        assert row["usage"] == "up: 1 model \u00b7 deepseek-v4.1-flash"
-        assert row["endpoint"] == "http://192.168.1.203:8080/v1"
+        assert row["usage"] == "up: 1 model \u00b7 deepseek-v4.1-flash-1017-xq-v4"
+        assert row["endpoint"] == "http://deepseek.nj02.gurov.us/v1"
         assert row["limits_url"] == ""
 
 
@@ -608,8 +608,8 @@ class TestIndexHtml:
                 "provider": "strata",
                 "auth_method": "none",
                 "key": None,
-                "models": ["deepseek-v4.1-flash"],
-                "default_model": "deepseek-v4.1-flash",
+                "models": ["deepseek-v4.1-flash-1017-xq-v4"],
+                "default_model": "deepseek-v4.1-flash-1017-xq-v4",
                 "added_at": "2026-10-23T00:00:00+00:00",
                 "status": "active",
                 "notes": "",
@@ -625,7 +625,7 @@ class TestIndexHtml:
         monkeypatch.setattr(serve, "_run_omp_usage", dict)
         html = serve.render_index_html("localhost:8930", registry_path)
         assert (
-            '<a href="http://192.168.1.203:8080/v1" target="_blank"'
+            '<a href="http://deepseek.nj02.gurov.us/v1" target="_blank"'
             ' rel="noopener"><b>strata</b></a>' in html
         )
 

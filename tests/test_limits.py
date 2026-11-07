@@ -68,9 +68,9 @@ def test_supported_lists_api_kind_ids_in_catalog_order():
     assert supported() == ["openrouter", "gemini", "strata", "qwen"]
     assert supported() == [p.id for p in CATALOG if p.limits_kind == "api"]
 
-STRATA_URL = "http://192.168.1.203:8080/v1"
-STRATA_MODEL = "deepseek-v4.1-flash"
-QWEN_URL = "http://qwen.nj02.gurov.us/v1"
+STRATA_URL = "http://deepseek.nj02.gurov.us/v1"
+STRATA_MODEL = "deepseek-v4.1-flash-1017-xq-v4"
+QWEN_URL = "http://qwen2.nj02.gurov.us/v1"
 QWEN_MODEL = "qwen3.8-flash-next-abliterated-iq3_s"
 
 
@@ -125,7 +125,7 @@ def test_fetch_qwen_probes_its_own_endpoint(monkeypatch):
     def fake_open(request, timeout):
         captured["url"] = request.full_url
         return FakeResponse(
-            json.dumps({"data": [_local_model(QWEN_MODEL, ctx=65536)]}).encode()
+            json.dumps({"data": [_local_model(QWEN_MODEL, ctx=1048576)]}).encode()
         )
 
     monkeypatch.setattr(limits, "_open", fake_open)
@@ -134,7 +134,7 @@ def test_fetch_qwen_probes_its_own_endpoint(monkeypatch):
     assert captured["url"] == f"{QWEN_URL}/models"
     assert snapshot.provider == "qwen"
     assert snapshot.source == "api"
-    assert snapshot.note == f"up: 1 model \u00b7 {QWEN_MODEL} \u00b7 65536 ctx \u00b7 text"
+    assert snapshot.note == f"up: 1 model \u00b7 {QWEN_MODEL} \u00b7 1048576 ctx \u00b7 text"
 
 
 STRATA_ERROR_CASES = [

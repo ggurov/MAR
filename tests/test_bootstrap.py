@@ -140,14 +140,14 @@ def test_prompt_unknown_provider_still_renders(tmp_path: Path) -> None:
 
 
 def test_prompt_local_endpoint_carries_url_and_omp_model_ref(tmp_path: Path) -> None:
-    model = "deepseek-v4.1-flash"
+    model = "deepseek-v4.1-flash-1017-xq-v4"
     reg = _registry(
         tmp_path, [_sub("strata", auth_method="none", key=None, model=model)]
     )
     prompt = render_prompt(reg)
     assert (
         f"- strata (Strata (local llama.cpp)) — default model: {model} — "
-        f"endpoint: http://192.168.1.203:8080/v1 "
+        f"endpoint: http://deepseek.nj02.gurov.us/v1 "
         f"(omp model: llama.cpp/{model})"
     ) in prompt
 
@@ -160,7 +160,7 @@ def test_prompt_second_local_endpoint_uses_lm_studio_ref(tmp_path: Path) -> None
     prompt = render_prompt(reg)
     assert (
         f"- qwen (Qwen (local llama.cpp)) — default model: {model} — "
-        f"endpoint: http://qwen.nj02.gurov.us/v1 "
+        f"endpoint: http://qwen2.nj02.gurov.us/v1 "
         f"(omp model: lm-studio/{model})"
     ) in prompt
 
@@ -199,7 +199,7 @@ def test_sync_writes_env_var_provider_to_dotenv(tmp_path: Path) -> None:
 
 def test_sync_writes_base_url_env_for_keyless_local_endpoint(tmp_path: Path) -> None:
     agent_dir = tmp_path / "agent"
-    model = "deepseek-v4.1-flash"
+    model = "deepseek-v4.1-flash-1017-xq-v4"
     reg = _registry(
         tmp_path, [_sub("strata", auth_method="none", key=None, model=model)]
     )
@@ -208,7 +208,7 @@ def test_sync_writes_base_url_env_for_keyless_local_endpoint(tmp_path: Path) -> 
 
     assert report == SyncReport(written=("llama.cpp",), skipped=())
     content = (agent_dir / ".env").read_text(encoding="utf-8")
-    assert content == "LLAMA_CPP_BASE_URL=http://192.168.1.203:8080/v1\n"
+    assert content == "LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1\n"
     assert not (agent_dir / "agent.db").exists()
 
 
@@ -223,7 +223,7 @@ def test_sync_writes_base_url_env_for_second_local_endpoint(tmp_path: Path) -> N
 
     assert report == SyncReport(written=("lm-studio",), skipped=())
     content = (agent_dir / ".env").read_text(encoding="utf-8")
-    assert content == "LM_STUDIO_BASE_URL=http://qwen.nj02.gurov.us/v1\n"
+    assert content == "LM_STUDIO_BASE_URL=http://qwen2.nj02.gurov.us/v1\n"
 
 
 def test_sync_rewrites_existing_base_url_in_place(tmp_path: Path) -> None:
@@ -238,7 +238,7 @@ def test_sync_rewrites_existing_base_url_in_place(tmp_path: Path) -> None:
 
     content = (agent_dir / ".env").read_text(encoding="utf-8")
     assert content == (
-        "LLAMA_CPP_BASE_URL=http://192.168.1.203:8080/v1\nOTHER=keep\n"
+        "LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1\nOTHER=keep\n"
     )
 
 

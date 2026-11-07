@@ -139,25 +139,28 @@ limits_kind, verified, notes, omp_base_url_env_var, base_url`
 - `validate()` returns a list of problem strings; tests assert it is empty for
   the shipped catalog.
 
-**verified 2026-10-31** — self-hosted engine route. `strata` is a keyless
-llama.cpp server on the LAN (`http://192.168.1.203:8080/v1`). omp discovers
-that engine implicitly as provider id `llama.cpp`, reading the endpoint from
+**verified 2026-10-31, endpoint moved 2026-11-07** — self-hosted engine
+route. `strata` is a keyless llama.cpp server on the LAN
+(`http://deepseek.nj02.gurov.us/v1`; the previous
+`http://192.168.1.203:8080/v1` is gone). omp discovers that engine
+implicitly as provider id `llama.cpp`, reading the endpoint from
 `LLAMA_CPP_BASE_URL` (agent `.env` works; verified live) and speaking the
 Responses API (`POST /v1/responses` answers; the server also serves `POST
-/v1/chat/completions`, `GET /v1/models`, `GET /props`, `GET /slots`; tool
-calls complete end to end). MAR therefore stores a subscription with
-`auth_method="none"`, writes no credential, and puts
-`LLAMA_CPP_BASE_URL=<base_url>` in `.env` on sync/export. The omp model
-reference is `llama.cpp/<model id>` (`deepseek-v4.1-flash`); omp's discovery
-fills context window (`meta.n_ctx` = 1048576) and input modalities from the
-server, and `mar limits strata` probes `{base_url}/models` (a LAN endpoint,
-not a web page — the fetchers that talk plain `http://` by design).
+/v1/chat/completions`, `GET /v1/models`, `GET /health`; tool calls complete
+end to end). MAR therefore stores a subscription with `auth_method="none"`,
+writes no credential, and puts `LLAMA_CPP_BASE_URL=<base_url>` in `.env` on
+sync/export. The omp model reference is `llama.cpp/<model id>`
+(`deepseek-v4.1-flash-1017-xq-v4`); omp's discovery fills context window
+(`meta.n_ctx` = 1048576) and input modalities from the server, and `mar
+limits strata` probes `{base_url}/models` (a LAN endpoint, not a web page —
+the fetchers that talk plain `http://` by design).
 
-A second keyless server (`qwen`, `http://qwen.nj02.gurov.us/v1`, verified
-2026-11-02) uses omp's other built-in local route: provider id `lm-studio`
-with `LM_STUDIO_BASE_URL`, model ref `lm-studio/<model id>`. omp supports one
-endpoint per built-in local provider, so each LAN engine needs its own route;
-both use the same generic `{base_url}/models` limits probe.
+A second keyless server (`qwen`, `http://qwen2.nj02.gurov.us/v1`, verified
+2026-11-02, hostname updated 2026-11-07) uses omp's other built-in local
+route: provider id `lm-studio` with `LM_STUDIO_BASE_URL`, model ref
+`lm-studio/<model id>`. omp supports one endpoint per built-in local
+provider, so each LAN engine needs its own route; both use the same generic
+`{base_url}/models` limits probe.
 
 ## Limits
 

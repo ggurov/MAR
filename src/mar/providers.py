@@ -326,12 +326,13 @@ CATALOG: tuple[Provider, ...] = (
         notes=(
             "Self-hosted llama.cpp server on the LAN; keyless, so MAR writes "
             "no credential — only the endpoint (LLAMA_CPP_BASE_URL). Probed "
-            "live 2026-10-31: GET /v1/models reports deepseek-v4.1-flash "
-            "(n_ctx 1048576, input text); POST /v1/chat/completions and "
-            "POST /v1/responses answer; omp completed plain replies and a "
-            "bash tool call through it as llama.cpp/deepseek-v4.1-flash."),
+            "live 2026-11-07 at the stable hostname: GET /v1/models reports "
+            "deepseek-v4.1-flash-1017-xq-v4 (n_ctx 1048576, input text); "
+            "POST /v1/chat/completions and POST /v1/responses answer; "
+            "GET /health 200. omp was verified against this server "
+            "(2026-10-31) as llama.cpp/<model>."),
         omp_base_url_env_var="LLAMA_CPP_BASE_URL",
-        base_url="http://192.168.1.203:8080/v1",
+        base_url="http://deepseek.nj02.gurov.us/v1",
     ),
     Provider(
         id="qwen",
@@ -351,14 +352,14 @@ CATALOG: tuple[Provider, ...] = (
             "Second self-hosted llama.cpp server on the LAN; keyless, so MAR "
             "writes only the endpoint. omp reaches it through its built-in "
             "OpenAI-compatible lm-studio provider (LM_STUDIO_BASE_URL). "
-            "Probed live 2026-11-02: GET /v1/models reports "
-            "qwen3.8-flash-next-abliterated-iq3_s (n_ctx 65536, input text); "
-            "POST /v1/chat/completions and POST /v1/responses answer; omp "
-            "completed a plain reply as "
-            "lm-studio/qwen3.8-flash-next-abliterated-iq3_s."
+            "Probed live 2026-11-07 at the stable hostname: GET /v1/models "
+            "reports qwen3.8-flash-next-abliterated-iq3_s (n_ctx 1048576, "
+            "input text); POST /v1/chat/completions and POST /v1/responses "
+            "answer; GET /health 200. omp completed a plain reply as "
+            "lm-studio/qwen3.8-flash-next-abliterated-iq3_s (2026-11-02)."
         ),
         omp_base_url_env_var="LM_STUDIO_BASE_URL",
-        base_url="http://qwen.nj02.gurov.us/v1",
+        base_url="http://qwen2.nj02.gurov.us/v1",
     ),
 )
 
