@@ -5,6 +5,7 @@ Endpoints (all GET):
                   services with quotas/renewals/usage links, repo link
     /config.sh  — bash export payload (BEGIN/END markers stripped)
     /config.ps1 — powershell export payload (BEGIN/END stripped)
+    /config.fish — fish export payload (BEGIN/END markers stripped)
 
 Payloads are generated fresh per request from the registry, so what a
 machine fetches always matches the current ``mar export`` output — updated
@@ -44,7 +45,7 @@ def render_config(
 
     Args:
         registry: Path to the MAR registry file.
-        shell: ``"bash"`` or ``"powershell"``.
+        shell: ``"bash"``, ``"powershell"``, or ``"fish"``.
         backend: Optional storage backend name; when given it is passed
             through, otherwise the file backend is forced via the path.
         memory: ``"on"`` (default) configures the global hindsight backend;
@@ -431,6 +432,7 @@ def render_index_html(host: str, registry: Path) -> str:
     """
     sh_cmd = f"curl -fsSL http://{host}/config.sh?memory=on | sh"
     ps_cmd = f"irm http://{host}/config.ps1?memory=on | iex"
+    fish_cmd = f"curl -fsSL http://{host}/config.fish?memory=on | fish"
     memory_url = os.environ.get("MAR_MEMORY_URL") or cli.DEFAULT_GLOBAL_MEMORY_URL
     dashboard_link = (
         f'<a href="{HINDSIGHT_DASHBOARD_URL}" target="_blank"'
@@ -526,6 +528,15 @@ def render_index_html(host: str, registry: Path) -> str:
   </div>
 
   <div class="card">
+    <h2>Fish</h2>
+    <code class="cmd" id="fish-cmd">{fish_cmd}</code>
+    <div class="row">
+      <button onclick="copyEl('fish-cmd', this)">Copy command</button>
+      <button class="ghost" onclick="copyFetch('/config.fish?memory='+memParam(), this)">Copy payload</button>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Global memory</h2>
     <label style="display:flex; gap:8px; align-items:center; font-weight:600;">
       <input type="checkbox" id="global-memory" checked> configure global memory
@@ -581,6 +592,8 @@ function refreshCommands() {{
     'curl -fsSL http://' + HOST + '/config.sh?memory=' + memParam() + ' | sh';
   document.getElementById('ps-cmd').textContent =
     'irm http://' + HOST + '/config.ps1?memory=' + memParam() + ' | iex';
+  document.getElementById('fish-cmd').textContent =
+    'curl -fsSL http://' + HOST + '/config.fish?memory=' + memParam() + ' | fish';
 }}
 document.getElementById('global-memory').addEventListener('change', refreshCommands);
 refreshCommands();
@@ -649,6 +662,12 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
                     200,
                     render_config(registry, "bash", backend, memory),
                     "text/x-shellscript; charset=utf-8",
+                )
+            elif parsed.path == "/config.fish":
+                self._send(
+                    200,
+                    render_config(registry, "fish", backend, memory),
+                    "text/x-fish; charset=utf-8",
                 )
             elif parsed.path == "/config.ps1":
                 self._send(

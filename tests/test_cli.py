@@ -308,6 +308,15 @@ class TestExport:
         assert "<<'MAR_EOF'" in out
         assert "OPENROUTER_API_KEY=or-key-123456789012" in out
 
+    def test_export_fish_set_gx(self, reg_path, capsys):
+        run(reg_path, "add", "openrouter", "--key", "or-key-123456789012")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "fish") == 0
+        out = capsys.readouterr().out
+        assert "set -gx OPENROUTER_API_KEY or-key-123456789012" in out
+        assert "set -gx PI_STRICT_EDIT_MODE 1" in out
+        assert "fish_add_path ~/.local/bin" in out
+        assert "omp config set edit.mode hashline" in out
     def test_export_carries_local_endpoint_base_urls(self, reg_path, capsys):
         run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
         run(reg_path, "add", "qwen", "--default", "qwen3.8-flash-next-abliterated-iq3_s")

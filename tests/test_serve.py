@@ -57,6 +57,14 @@ class TestRenderConfig:
         assert "ZAI_API_KEY" not in body_before
         assert "ZAI_API_KEY" in body_after
 
+    def test_fish_payload_uses_set_gx(self, registry_path):
+        body = serve.render_config(registry_path, "fish")
+        assert "set -gx ZAI_API_KEY zai-key-1234567890" in body
+        assert "set -gx PI_STRICT_EDIT_MODE 1" in body
+        assert "fish_add_path ~/.local/bin" in body
+        assert "omp config set edit.mode hashline" in body
+        assert "BEGIN" not in body
+
     def test_memory_defaults_to_global_hindsight(self, registry_path):
         body = serve.render_config(registry_path, "bash")
         assert "omp config set memory.backend hindsight" in body
@@ -667,6 +675,11 @@ class TestHttpServer:
         status, body = self._get(f"{server}/config.ps1")
         assert status == 200
         assert "Set-Content" in body
+
+    def test_config_fish_served(self, server):
+        status, body = self._get(f"{server}/config.fish")
+        assert status == 200
+        assert "set -gx ZAI_API_KEY zai-key-1234567890" in body
 
     def test_config_ps1_memory_off(self, server):
         status, body = self._get(f"{server}/config.ps1?memory=off")
