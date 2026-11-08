@@ -55,6 +55,19 @@ class TestAdd:
     def test_add_api_key_requires_key(self, reg_path):
         assert run(reg_path, "add", "zai") == 1
 
+    def test_add_keyless_provider_needs_no_key(self, reg_path, capsys):
+        model = "deepseek-v4.1-flash-1017-xq-v4"
+        assert run(reg_path, "add", "strata", "--default", model) == 0
+        sub = json.loads(reg_path.read_text(encoding="utf-8"))["subscriptions"][0]
+        assert (sub["provider"], sub["auth_method"], sub["key"]) == ("strata", "none", None)
+        assert sub["default_model"] == model
+        assert model in capsys.readouterr().out
+
+    def test_add_keyless_provider_rejects_a_key(self, reg_path, capsys):
+        assert run(reg_path, "add", "strata", "--key", FAKE_KEY) == 2
+        assert "keyless" in capsys.readouterr().err
+        assert not reg_path.exists()
+
     def test_add_duplicate_fails(self, reg_path):
         assert add_zai(reg_path) == 0
         assert add_zai(reg_path) == 1
@@ -151,6 +164,50 @@ class TestLimits:
         out = capsys.readouterr().out
         assert "gemini (api):" in out
         assert "key alive: 1 models visible (1 gemini)" in out
+
+    def test_limits_keyless_local_endpoint_probes_its_models_list(
+        self, reg_path, monkeypatch, capsys
+    ):
+        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
+        capsys.readouterr()
+        seen = {}
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "data": [
+                            {
+                                "id": "deepseek-v4.1-flash-1017-xq-v4",
+                                "meta": {"n_ctx": 1048576},
+                                "architecture": {
+                                    "input_modalities": ["text"],
+                                    "output_modalities": ["text"],
+                                },
+                            }
+                        ]
+                    }
+                ).encode()
+
+        def fake_open(req, timeout=10.0):
+            seen["url"] = req.full_url
+            return FakeResponse()
+
+        monkeypatch.setattr("mar.limits._open", fake_open)
+        assert run(reg_path, "limits", "strata") == 0
+        out = capsys.readouterr().out
+        assert seen["url"] == "http://deepseek.nj02.gurov.us/v1/models"
+        assert "strata (api):" in out
+        assert "up: 1 model \u00b7 deepseek-v4.1-flash-1017-xq-v4" in out
+        assert "1048576 ctx" in out
 
 
 class TestOmpSync:
@@ -260,6 +317,43 @@ class TestExport:
         assert "set -gx PI_STRICT_EDIT_MODE 1" in out
         assert "fish_add_path ~/.local/bin" in out
         assert "omp config set edit.mode hashline" in out
+    def test_export_carries_local_endpoint_base_urls(self, reg_path, capsys):
+        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
+        run(reg_path, "add", "qwen", "--default", "qwen3.8-flash-next-abliterated-iq3_s")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        out = capsys.readouterr().out
+        assert "LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1" in out
+        assert "LM_STUDIO_BASE_URL=http://qwen2.nj02.gurov.us/v1" in out
+
+    @pytest.mark.parametrize("shell", ["bash", "powershell"])
+    def test_export_declares_local_model_context(self, reg_path, capsys, shell):
+        run(reg_path, "add", "qwen", "--default", "qwen3.8-flash-next-abliterated-iq3_s")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", shell) == 0
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "models.yml" in out
+        assert "qwen3.8-flash-next-abliterated-iq3_s" in out
+        assert "contextWindow: 1048576" in out
+        assert "baseUrl: http://qwen2.nj02.gurov.us/v1" in out
+        assert "contextWindow" in captured.err
+
+    def test_export_omits_models_yml_without_a_declared_endpoint(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        assert "models.yml" not in capsys.readouterr().out
+
+    def test_export_redact_keeps_base_url_plain(self, reg_path, capsys):
+        run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--redact", "--shell", "bash") == 0
+        out = capsys.readouterr().out
+        assert "LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1" in out
+        assert "zai-key-1234567890" not in out
+        assert "ZAI_API_KEY=zai-...7890" in out
 
     def test_export_skips_oauth_and_unknown_and_envless(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
@@ -336,7 +430,11 @@ class TestExport:
         assert re.search(r"(?m)^\s*else\b", out) is None
         for line in out.splitlines():
             if line.startswith("if ("):
-                assert line.rstrip().endswith("}"), f"dangling if-block line: {line!r}"
+                # One-line ifs close on the same line; the version branch
+                # opens a block with `{` and closes it on its own `}` line.
+                assert line.rstrip().endswith(("}", "{")), (
+                    f"dangling if-block line: {line!r}"
+                )
 
     def test_export_roles_bash_variant(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "iso-agent"
@@ -365,7 +463,7 @@ class TestExport:
         agent_dir = tmp_path / "iso-agent"
         agent_dir.mkdir()
         (agent_dir / ".env").write_text(
-            "LM_STUDIO_BASE_URL=http://192.168.1.242:1234/v1\n"
+            "OLLAMA_BASE_URL=http://192.168.1.242:1234/v1\n"
             "OPENROUTER_API_KEY=stale-local-key-123456789\n"
             "# comment\n"
             "export ZAI_API_KEY=stale-zai-123456789012\n",
@@ -376,13 +474,15 @@ class TestExport:
         assert run(reg_path, "export") == 0
         captured = capsys.readouterr()
         out = captured.out
-        assert "LM_STUDIO_BASE_URL=http://192.168.1.242:1234/v1" in out
+        assert "OLLAMA_BASE_URL=http://192.168.1.242:1234/v1" in out
         assert "stale-local-key" not in out  # provider vars never pass through
         assert "stale-zai" not in out
         assert "ZAI_API_KEY=zai-key-1234567890" in out  # registry is authoritative
-        assert "carried local env override(s): LM_STUDIO_BASE_URL" in captured.err
+        assert "carried local env override(s): OLLAMA_BASE_URL" in captured.err
 
-    def test_export_bash_carries_edit_statusline_and_path(self, reg_path, tmp_path, capsys):
+    def test_export_bash_carries_edit_standard_statusline_and_path(
+        self, reg_path, tmp_path, capsys
+    ):
         agent_dir = tmp_path / "iso-agent"
         agent_dir.mkdir()
         (agent_dir / "config.yml").write_text(
@@ -400,12 +500,38 @@ class TestExport:
         assert "omp config set edit.mode hashline" in out
         assert 'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'' in out
         assert "omp config set statusLine.preset custom" in out
-        assert 'omp config set statusLine.leftSegments \'["vim","hostname","model"]\'' in out
-        assert "omp config set statusLine.rightSegments '[\"token_total\"]'" in out
+        assert (
+            'omp config set statusLine.leftSegments'
+            ' \'["vim","hostname","mode","path","git","pr"]\'' in out
+        )
+        assert (
+            'omp config set statusLine.rightSegments'
+            ' \'["session_name","token_total","cost","context_pct"]\'' in out
+        )
+        assert (
+            "cat > ~/.omp/agent/extensions/mar-statusline.js"
+            " <<'MAR_STATUSLINE_EOF'" in out
+        )
+        assert "aboveEditor" in out  # extension renders the provider/id line
         assert 'case ":$PATH:"' in out  # live PATH for the paste session
         assert "grep -qs" in out and ".bashrc" in out  # persistent PATH fix
         assert "hashline" in captured.err
-        assert "statusLine" in captured.err
+        assert "omp config set tools.approvalMode yolo" in out
+        assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert "omp config set hideThinkingBlock true" in out
+        assert "omp config set memory.backend hindsight" in out
+        assert (
+            "omp config set hindsight.apiUrl http://hub.nj02.gurov.us:8888" in out
+        )
+        assert "omp config set composer.tokenRate true" in out
+        assert "thinking blocks hidden" in captured.err
+        assert "advisor engagement is pinned OFF" in captured.err
+        assert "approval pinned to yolo" in captured.err
+        assert "run /vibe in the omp session" in captured.err
+        assert "routing follows modelRoles.task" in captured.err
+        assert "statusLine standardized" in captured.err
+        assert "global memory" in captured.err
+        assert "generation rate display" in captured.err
 
     def test_export_powershell_settings_skip_bashrc_fix(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "iso-agent"
@@ -417,19 +543,113 @@ class TestExport:
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         capsys.readouterr()
         assert run(reg_path, "export") == 0
-        out = capsys.readouterr().out
+        captured = capsys.readouterr()
+        out = captured.out
         assert "omp config set edit.mode hashline" in out
-        assert 'omp config set statusLine.leftSegments \'["vim","hostname"]\'' in out
+        assert (
+            'omp --% config set edit.modelVariants "{\\"deepseek\\":\\"hashline\\"}"'
+            in out
+        )
+        assert (
+            'omp --% config set statusLine.leftSegments'
+            ' "[\\"vim\\",\\"hostname\\",\\"mode\\",\\"path\\",\\"git\\",\\"pr\\"]"'
+            in out
+        )
+        assert "omp config set tools.approvalMode yolo" in out
+        assert 'omp --% config set task.agentAdvisor "{\\"task\\":\\"off\\"}"' in out
+        assert "omp config set hideThinkingBlock true" in out
+        assert "omp config set memory.backend hindsight" in out
+        assert (
+            "omp config set hindsight.apiUrl http://hub.nj02.gurov.us:8888" in out
+        )
+        assert "omp config set composer.tokenRate true" in out
+        assert "advisor engagement is pinned OFF" in captured.err
+        assert "global memory" in captured.err
+        assert (
+            'Set-Content "$env:USERPROFILE\\.omp\\agent\\extensions\\mar-statusline.js"'
+            in out
+        )
         assert ".bashrc" not in out
 
-    def test_export_without_local_statusline_skips_statusline(self, reg_path, capsys):
+    def test_export_memory_off_emits_no_memory(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash", "--memory", "off") == 0
+        out = capsys.readouterr().out
+        assert "omp config set memory.backend off" in out
+        assert "hindsight" not in out
+
+    def test_export_memory_url_override(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert (
+            run(
+                reg_path,
+                "export",
+                "--shell",
+                "bash",
+                "--memory-url",
+                "http://mem.example:9999",
+            )
+            == 0
+        )
+        out = capsys.readouterr().out
+        assert "omp config set hindsight.apiUrl http://mem.example:9999" in out
+
+    def test_export_powershell_json_args_pick_legacy_or_standard(
+        self, reg_path, tmp_path, capsys
+    ):
+        """PS 5.1-7.2 need ``--%``; PS 7.3+ needs the plain string form."""
+        agent_dir = tmp_path / "iso-agent"
+        agent_dir.mkdir()
+        (agent_dir / "config.yml").write_text(
+            "statusLine:\n"
+            "  leftSegments: [vim, hostname]\n"
+            "  rightSegments: [token_total, cost]\n",
+            encoding="utf-8",
+        )
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export") == 0
+        out = capsys.readouterr().out
+        legacy = (
+            'omp --% config set edit.modelVariants "{\\"deepseek\\":\\"hashline\\"}"'
+        )
+        modern = "omp config set edit.modelVariants '{\"deepseek\":\"hashline\"}'"
+        assert "$marNap = Get-Variable PSNativeCommandArgumentPassing" in out
+        assert "if ($PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $marNap" in out
+        assert "} else {" in out
+        assert out.index(legacy) < out.index("} else {") < out.index(modern)
+        assert (
+            'omp --% config set task.agentAdvisor "{\\"task\\":\\"off\\"}"' in out
+        )
+        left_json = (
+            '"[\\"vim\\",\\"hostname\\",\\"mode\\",\\"path\\",\\"git\\",\\"pr\\"]"'
+        )
+        right_json = (
+            '"[\\"session_name\\",\\"token_total\\",\\"cost\\",\\"context_pct\\"]"'
+        )
+        assert f"omp --% config set statusLine.leftSegments {left_json}" in out
+        assert f"omp --% config set statusLine.rightSegments {right_json}" in out
+        assert "omp config set task.agentAdvisor '{\"task\":\"off\"}'" in out
+        assert (
+            "omp config set statusLine.leftSegments"
+            " '[\"vim\",\"hostname\",\"mode\",\"path\",\"git\",\"pr\"]'" in out
+        )
+        assert (
+            "omp config set statusLine.rightSegments"
+            " '[\"session_name\",\"token_total\",\"cost\",\"context_pct\"]'" in out
+        )
+
+    def test_export_standardizes_statusline_without_local_config(self, reg_path, capsys):
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
         capsys.readouterr()
         assert run(reg_path, "export", "--shell", "bash") == 0
         captured = capsys.readouterr()
         assert "omp config set edit.mode hashline" in captured.out  # policy always carried
-        assert "statusLine" not in captured.out
-        assert "statusLine not exported" in captured.err
+        assert "omp config set statusLine.preset custom" in captured.out
+        assert "mar-statusline.js" in captured.out
+        assert "statusLine standardized" in captured.err
 
     def test_export_ships_strict_edit_mode_env(self, reg_path, tmp_path, capsys):
         agent_dir = tmp_path / "iso-agent"
@@ -543,6 +763,68 @@ class TestPull:
         empty = tmp_path / "empty-agent"
         empty.mkdir()
         assert run(reg_path, "pull", "--agent-dir", str(empty)) == 1
+
+    @pytest.fixture()
+    def env_agent(self, tmp_path):
+        """omp agent dir configured the way this machine is: credentials in .env."""
+        agent_dir = tmp_path / "env-agent"
+        agent_dir.mkdir()
+        (agent_dir / ".env").write_text(
+            "ANTHROPIC_OAUTH_TOKEN=anthropic-env-token-123\n"
+            "OPENAI_CODEX_OAUTH_TOKEN=codex-env-token-123\n"
+            "ZAI_API_KEY=zai-env-key-1234567890\n"
+            "CLINE_API_KEY=cline-env-key-1234567890\n"
+            "PI_STRICT_EDIT_MODE=1\n",
+            encoding="utf-8",
+        )
+        return agent_dir
+
+    def test_pull_adopts_env_credentials(self, reg_path, env_agent, capsys):
+        assert run(reg_path, "pull", "--agent-dir", str(env_agent)) == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        subs = {s["provider"]: s for s in data["subscriptions"]}
+        assert subs["claude"]["auth_method"] == "oauth"
+        assert subs["claude"]["key"] == "anthropic-env-token-123"
+        assert "ANTHROPIC_OAUTH_TOKEN" in subs["claude"]["notes"]
+        assert subs["codex"]["auth_method"] == "oauth"
+        assert subs["codex"]["key"] == "codex-env-token-123"
+        assert subs["zai"]["auth_method"] == "api_key"
+        assert subs["zai"]["key"] == "zai-env-key-1234567890"
+        assert "ZAI_API_KEY" in subs["zai"]["notes"]
+        assert subs["cline"]["auth_method"] == "api_key"
+        assert "PI_STRICT_EDIT_MODE" not in json.dumps(data)
+        out = capsys.readouterr().out
+        assert "pulled: claude (.env ANTHROPIC_OAUTH_TOKEN)" in out
+        assert "pulled: zai (.env ZAI_API_KEY)" in out
+
+    def test_pull_agent_db_oauth_wins_over_env(self, reg_path, agent_db, capsys):
+        (agent_db / ".env").write_text(
+            "ANTHROPIC_OAUTH_TOKEN=env-shadow-token-123\n"
+            "GEMINI_API_KEY=gemini-env-key-1234567890\n",
+            encoding="utf-8",
+        )
+        assert run(reg_path, "pull", "--agent-dir", str(agent_db)) == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        subs = {s["provider"]: s for s in data["subscriptions"]}
+        assert subs["claude"]["key"] == "anthropic-access-token-123"
+        assert subs["claude"]["expires_at_ms"] == 1791660887205
+        assert subs["gemini"]["key"] == "gemini-env-key-1234567890"
+
+    def test_pull_env_preserves_models_on_existing_sub(self, reg_path, env_agent):
+        run(reg_path, "add", "zai", "--key", "old-key-1234567890", "--default", "glm-4.7")
+        assert run(reg_path, "pull", "--agent-dir", str(env_agent)) == 0
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        sub = next(s for s in data["subscriptions"] if s["provider"] == "zai")
+        assert sub["key"] == "zai-env-key-1234567890"
+        assert sub["default_model"] == "glm-4.7"
+        assert sub["models"] == ["glm-4.7"]
+
+    def test_pull_no_credentials_names_both_sources(self, reg_path, tmp_path, capsys):
+        empty = tmp_path / "empty-agent"
+        empty.mkdir()
+        assert run(reg_path, "pull", "--agent-dir", str(empty)) == 1
+        err = capsys.readouterr().err
+        assert "agent.db" in err and ".env" in err
 
 
 class TestExportOauth:

@@ -1,11 +1,10 @@
 """Tests for the static provider catalog (M2).
 
-The catalog must mirror docs/providers.md exactly: 96 providers, fixed
-order. The 12 originals were roster-confirmed 2026-10-10; the 2026-10-13
-roster sweep confirmed every omp id/env against omp's provider roster
-(omp://providers.md + compiled KDL auth policies). llama-cpp, orcarouter,
-and cloudflare ship verified=False. Validation rules are exercised by
-tampering with copies of catalog entries (the shipped CATALOG is frozen).
+The catalog must mirror docs/providers.md exactly: 14 providers, fixed order,
+verification flags confirmed against omp's provider roster (2026-10-10) and
+live LAN llama.cpp probes (2026-10-23 through 2026-11-02). Validation rules
+are exercised by tampering with copies of catalog entries (the shipped
+CATALOG is frozen).
 """
 
 import dataclasses
@@ -111,11 +110,13 @@ EXPECTED_IDS = (
     "zai-coding-plan",
     "zenmux",
     "zhipu-coding-plan",
+    "strata",
+    "qwen",
 )
 
-UNVERIFIED_IDS: set[str] = {"cloudflare", "llama-cpp", "orcarouter"}
+UNVERIFIED_IDS: set[str] = {"cloudflare", "orcarouter"}
 
-VERIFIED_IDS = {"abliteration", "aiand", "aimlapi", "alibaba-coding-plan", "alibaba-token-plan", "amazon-bedrock", "antigravity", "apple", "azure", "baseten", "bedrock-mantle", "cerebras", "charm-hyper", "claude", "cline", "cloudflare-ai-gateway", "codex", "commandcode", "copilot", "coreweave", "cursor-grok", "deepinfra", "deepseek", "devin", "exa", "factory-droid", "firepass", "fireworks", "gemini", "gitlab-duo", "gitlab-duo-agent", "gmi-cloud", "google-gemini-cli", "google-vertex", "groq", "helmcode", "huggingface", "jev", "kagi", "kilo", "kimi-code", "litellm", "lm-studio", "local", "meta", "minimax", "minimax-code", "minimax-code-cn", "mistral", "moonshot", "muse-code", "nanogpt", "novita", "nvidia", "ollama", "ollama-cloud", "openai", "openai-codex-device", "opencode", "opencode-zen", "openrouter", "parallel", "perplexity", "qianfan", "qwen-portal", "sakana", "siliconflow", "siliconflow-cn", "singularityapi-dev", "singularityapi-tech", "snowflake", "stencil", "stepfun", "synthetic", "tavily", "together", "umans", "venice", "vercel-ai-gateway", "vllm", "wafer-serverless", "web", "xai", "xai-oauth", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "yolo-auto", "zai", "zai-coding-plan", "zenmux", "zhipu-coding-plan"}
+VERIFIED_IDS = {"abliteration", "aiand", "aimlapi", "alibaba-coding-plan", "alibaba-token-plan", "amazon-bedrock", "antigravity", "apple", "azure", "baseten", "bedrock-mantle", "cerebras", "charm-hyper", "claude", "cline", "cloudflare-ai-gateway", "codex", "commandcode", "copilot", "coreweave", "cursor-grok", "deepinfra", "deepseek", "devin", "exa", "factory-droid", "firepass", "fireworks", "gemini", "gitlab-duo", "gitlab-duo-agent", "gmi-cloud", "google-gemini-cli", "google-vertex", "groq", "helmcode", "huggingface", "jev", "kagi", "kilo", "kimi-code", "litellm", "llama-cpp", "lm-studio", "local", "meta", "minimax", "minimax-code", "minimax-code-cn", "mistral", "moonshot", "muse-code", "nanogpt", "novita", "nvidia", "ollama", "ollama-cloud", "openai", "openai-codex-device", "opencode", "opencode-zen", "openrouter", "parallel", "perplexity", "qianfan", "qwen", "qwen-portal", "sakana", "siliconflow", "siliconflow-cn", "singularityapi-dev", "singularityapi-tech", "snowflake", "stencil", "stepfun", "strata", "synthetic", "tavily", "together", "umans", "venice", "vercel-ai-gateway", "vllm", "wafer-serverless", "web", "xai", "xai-oauth", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "yolo-auto", "zai", "zai-coding-plan", "zenmux", "zhipu-coding-plan"}
 
 OMP_IDS = {
     "cursor-grok": "cursor",
@@ -166,7 +167,7 @@ OMP_IDS = {
     "kilo": "kilo",
     "kimi-code": "kimi-code",
     "litellm": "litellm",
-    "llama-cpp": "",
+    "llama-cpp": "llama.cpp",
     "lm-studio": "lm-studio",
     "local": "local",
     "meta": "meta",
@@ -214,6 +215,8 @@ OMP_IDS = {
     "zai-coding-plan": "zai-coding-plan",
     "zenmux": "zenmux",
     "zhipu-coding-plan": "zhipu-coding-plan",
+    "strata": "llama.cpp",
+    "qwen": "lm-studio",
 }
 
 ENV_VARS = {
@@ -313,6 +316,8 @@ ENV_VARS = {
     "zai-coding-plan": "",
     "zenmux": "ZENMUX_API_KEY",
     "zhipu-coding-plan": "ZHIPU_API_KEY",
+    "strata": "",
+    "qwen": "",
 }
 
 OAUTH_ENV_VARS = {
@@ -412,6 +417,8 @@ OAUTH_ENV_VARS = {
     "zai-coding-plan": "",
     "zenmux": "",
     "zhipu-coding-plan": "",
+    "strata": "",
+    "qwen": "",
 }
 
 EXPORT_KEY_ENV_VARS = {
@@ -511,15 +518,124 @@ EXPORT_KEY_ENV_VARS = {
     "zai-coding-plan": "",
     "zenmux": "ZENMUX_API_KEY",
     "zhipu-coding-plan": "ZHIPU_API_KEY",
+    "strata": "",
+    "qwen": "",
 }
 
 URL_FIELDS = ("key_url", "limits_url", "signup_url")
+
+# Self-hosted endpoints are plain HTTP on the LAN: (base_url, env route).
+BASE_URLS = {
+    "strata": ("http://deepseek.nj02.gurov.us/v1", "LLAMA_CPP_BASE_URL"),
+    "qwen": ("http://qwen2.nj02.gurov.us/v1", "LM_STUDIO_BASE_URL"),
+}
+
+AUTH_METHODS = {
+    "cursor-grok": ("api_key",),
+    "codex": ("api_key",),
+    "claude": ("api_key",),
+    "cline": ("api_key",),
+    "opencode": ("api_key",),
+    "zai": ("api_key",),
+    "openrouter": ("api_key",),
+    "antigravity": ("api_key",),
+    "copilot": ("api_key",),
+    "jev": ("api_key",),
+    "gemini": ("api_key",),
+    "commandcode": ("api_key",),
+    "deepseek": ("api_key",),
+    "groq": ("api_key",),
+    "cerebras": ("api_key",),
+    "mistral": ("api_key",),
+    "orcarouter": ("api_key",),
+    "cloudflare": ("api_key",),
+    "abliteration": ("api_key",),
+    "aiand": ("api_key",),
+    "aimlapi": ("api_key",),
+    "alibaba-coding-plan": ("api_key",),
+    "alibaba-token-plan": ("api_key",),
+    "amazon-bedrock": ("api_key",),
+    "apple": ("api_key",),
+    "azure": ("api_key",),
+    "baseten": ("api_key",),
+    "bedrock-mantle": ("api_key",),
+    "charm-hyper": ("api_key",),
+    "cloudflare-ai-gateway": ("api_key",),
+    "coreweave": ("api_key",),
+    "deepinfra": ("api_key",),
+    "devin": ("api_key",),
+    "exa": ("api_key",),
+    "factory-droid": ("api_key",),
+    "firepass": ("api_key",),
+    "fireworks": ("api_key",),
+    "gitlab-duo": ("api_key",),
+    "gitlab-duo-agent": ("api_key",),
+    "gmi-cloud": ("api_key",),
+    "google-gemini-cli": ("api_key",),
+    "google-vertex": ("api_key",),
+    "helmcode": ("api_key",),
+    "huggingface": ("api_key",),
+    "kagi": ("api_key",),
+    "kilo": ("api_key",),
+    "kimi-code": ("api_key",),
+    "litellm": ("api_key",),
+    "llama-cpp": ("api_key",),
+    "lm-studio": ("api_key",),
+    "local": ("api_key",),
+    "meta": ("api_key",),
+    "minimax": ("api_key",),
+    "minimax-code": ("api_key",),
+    "minimax-code-cn": ("api_key",),
+    "moonshot": ("api_key",),
+    "muse-code": ("api_key",),
+    "nanogpt": ("api_key",),
+    "novita": ("api_key",),
+    "nvidia": ("api_key",),
+    "ollama": ("api_key",),
+    "ollama-cloud": ("api_key",),
+    "openai": ("api_key",),
+    "openai-codex-device": ("api_key",),
+    "opencode-zen": ("api_key",),
+    "parallel": ("api_key",),
+    "perplexity": ("api_key",),
+    "qianfan": ("api_key",),
+    "qwen-portal": ("api_key",),
+    "sakana": ("api_key",),
+    "siliconflow": ("api_key",),
+    "siliconflow-cn": ("api_key",),
+    "singularityapi-dev": ("api_key",),
+    "singularityapi-tech": ("api_key",),
+    "snowflake": ("api_key",),
+    "stencil": ("api_key",),
+    "stepfun": ("api_key",),
+    "synthetic": ("api_key",),
+    "tavily": ("api_key",),
+    "together": ("api_key",),
+    "umans": ("api_key",),
+    "venice": ("api_key",),
+    "vercel-ai-gateway": ("api_key",),
+    "vllm": ("api_key",),
+    "wafer-serverless": ("api_key",),
+    "web": ("api_key",),
+    "xai": ("api_key",),
+    "xai-oauth": ("api_key",),
+    "xiaomi": ("api_key",),
+    "xiaomi-token-plan-ams": ("api_key",),
+    "xiaomi-token-plan-cn": ("api_key",),
+    "xiaomi-token-plan-sgp": ("api_key",),
+    "yolo-auto": ("api_key",),
+    "zai-coding-plan": ("api_key",),
+    "zenmux": ("api_key",),
+    "zhipu-coding-plan": ("api_key",),
+    "strata": ("none",),
+    "qwen": ("none",),
+}
 
 
 def test_ids_returns_exact_catalog_in_order():
     assert ids() == EXPECTED_IDS
     assert tuple(p.id for p in CATALOG) == EXPECTED_IDS
-    assert len(CATALOG) == 96
+    assert len(CATALOG) == 98
 
 
 def test_get_returns_matching_provider():
@@ -543,16 +659,15 @@ def test_get_unknown_id_raises_key_error_listing_valid_ids():
 def test_every_url_field_is_https(provider):
     for field in URL_FIELDS:
         url = getattr(provider, field)
-        assert url.startswith("https://"), f"{provider.id}.{field} = {url!r}"
+        assert not url or url.startswith("https://"), f"{provider.id}.{field} = {url!r}"
 
 
 def test_validate_shipped_catalog_is_healthy():
     assert validate() == []
 
 
-def test_unverified_is_exactly_the_three_unconfirmed():
-    assert tuple(p.id for p in unverified()) == (
-        "orcarouter", "cloudflare", "llama-cpp")
+def test_unverified_is_exactly_the_two_unconfirmed():
+    assert tuple(p.id for p in unverified()) == ("orcarouter", "cloudflare")
 
 
 def test_verified_are_all_roster_confirmed_providers():
@@ -579,17 +694,68 @@ def test_export_key_env_vars_match_official_roster(provider_id, env_var):
     assert get(provider_id).export_env_var == env_var
 
 
-def test_limits_kind_api_providers_are_openrouter_and_gemini():
+def test_limits_kind_api_providers_include_both_local_endpoints():
     api_providers = [p for p in CATALOG if p.limits_kind == "api"]
-    assert [p.id for p in api_providers] == ["openrouter", "gemini"]
+    assert [p.id for p in api_providers] == [
+        "openrouter",
+        "gemini",
+        "strata",
+        "qwen",
+    ]
     manual = [p.id for p in CATALOG if p.limits_kind == "manual"]
     assert "gemini" not in manual
 
 
 @pytest.mark.parametrize("provider", CATALOG, ids=lambda p: p.id)
 def test_v1_defaults(provider):
-    assert provider.auth_methods == ("api_key",)
+    assert provider.auth_methods == AUTH_METHODS[provider.id]
     assert provider.default_model is None
+
+
+@pytest.mark.parametrize(("provider_id", "base_url"), sorted(BASE_URLS.items()))
+def test_local_endpoint_base_urls_and_env_routes(provider_id, base_url):
+    provider = get(provider_id)
+    assert (provider.base_url, provider.omp_base_url_env_var) == base_url
+
+
+def test_only_self_hosted_entries_carry_a_base_url():
+    assert [p.id for p in CATALOG if p.base_url] == ["strata", "qwen"]
+
+
+def test_strata_is_keyless_with_no_web_pages():
+    strata = get("strata")
+    assert strata.auth_methods == ("none",)
+    assert strata.verified is True
+    assert strata.omp_provider_id == "llama.cpp"
+    assert strata.limits_kind == "api"
+    assert (strata.key_url, strata.limits_url, strata.signup_url) == ("", "", "")
+    assert strata.export_env_var == "" and strata.omp_env_var == ""
+
+
+def test_qwen_is_keyless_on_the_lm_studio_route():
+    qwen = get("qwen")
+    assert qwen.auth_methods == ("none",)
+    assert qwen.verified is True
+    assert qwen.omp_provider_id == "lm-studio"
+    assert qwen.limits_kind == "api"
+    assert (qwen.key_url, qwen.limits_url, qwen.signup_url) == ("", "", "")
+    assert qwen.export_env_var == "" and qwen.omp_env_var == ""
+    assert qwen.omp_base_url_env_var == "LM_STUDIO_BASE_URL"
+
+
+def test_self_hosted_entries_record_the_server_context_window():
+    assert [(p.id, p.context_window) for p in CATALOG if p.context_window] == [
+        ("strata", 1048576),
+        ("qwen", 1048576),
+    ]
+
+
+def test_only_qwen_needs_an_explicit_omp_model_declaration():
+    # omp's llama.cpp route reads n_ctx from /v1/models; its lm-studio route
+    # cannot, so qwen's window must be declared in models.yml.
+    assert [(p.id, p.omp_models_api) for p in CATALOG if p.omp_models_api] == [
+        ("qwen", "openai-completions")
+    ]
 
 
 BASE = CATALOG[0]
@@ -634,6 +800,36 @@ TAMPER_CASES = [
         dataclasses.replace(BASE, omp_env_var="not an env var"),
         "omp_env_var 'not an env var' does not match",
         id="bad-env-var-shape",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, base_url="ftp://localhost:8080/v1"),
+        "base_url must start with http:// or https://",
+        id="bad-base-url-scheme",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, base_url="http://localhost:8080/v1"),
+        "base_url requires omp_base_url_env_var",
+        id="base-url-without-env-route",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, omp_base_url_env_var="llama_cpp_base_url"),
+        "omp_base_url_env_var 'llama_cpp_base_url' does not match",
+        id="bad-base-url-env-var-shape",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, context_window=-1),
+        "context_window must be positive",
+        id="negative-context-window",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, context_window=128000),
+        "context_window requires a base_url",
+        id="context-window-without-base-url",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, omp_models_api="openai-completions"),
+        "omp_models_api requires context_window and a base_url",
+        id="models-api-without-context",
     ),
 ]
 

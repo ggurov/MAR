@@ -17,6 +17,7 @@ the wrong repo.
 | Lint | `uv run ruff check src tests` |
 | Format | `uv run ruff format src tests` |
 | Run the CLI | `uv run mar --help` |
+| Deploy the container | `docker compose -f /ssd/swarm/mar/docker-compose.yml up -d --build` |
 
 Python >= 3.12, managed by uv. Runtime deps: stdlib + `pyyaml` only. Adding a
 runtime dependency requires a PLAN.md entry saying why.
@@ -32,6 +33,11 @@ runtime dependency requires a PLAN.md entry saying why.
 5. Refactor. Keep modules under 300 lines; split by concept, not by size.
 6. Run the FULL suite: `uv run pytest`.
 7. Commit — **green state only**.
+8. If `src/`, `pyproject.toml`, or `Dockerfile` changed, redeploy:
+   `docker compose -f /ssd/swarm/mar/docker-compose.yml up -d --build`,
+   then verify the change is visible in the served `/config.sh`. The container
+   runs the baked image, not your checkout, so an un-rebuilt container serves
+   stale code.
 
 Commit messages: `test:`, `feat:`, `fix:`, `docs:`, `chore:` + imperative
 subject. Red states live in your working tree, never in history — history must
@@ -43,9 +49,12 @@ bisect.
    in unit tests. Every path comes from `tmp_path` or an explicit argument.
    `MAR_HOME` / `PI_CODING_AGENT_DIR` env vars are overrides for production use, and
    tests must set them to `tmp_path` when exercising default-path logic.
-2. **Keys are secrets.** Never print, log, commit, or embed a raw key. Use the
-   CLI's masking output (`sk_…abcd`). Fixtures use obviously fake keys
-   (`test-key-1234`).
+2. **Keys stay out of the repo.** Never commit or embed a raw key —
+   `tests/test_repo_hygiene.py` enforces this and stays in force. Raw keys
+   appearing in chat, command output, or session transcripts is acceptable
+   during development; the owner works with raw keys knowingly. The CLI's
+   masking output (`sk_…abcd`) remains the presentation default, and fixtures
+   keep using obviously fake keys (`test-key-1234`).
 3. **No stubs.** No `NotImplementedError`, no `TODO`, no mock-returns in
    `src/`. If a real dependency is missing (e.g. an unverified provider
    endpoint), the catalog/notes say so explicitly and the CLI says what it
@@ -66,7 +75,7 @@ bisect.
 ```
 src/mar/
   registry.py    # Subscription store: CRUD + persistence (~/.mar/registry.json)
-  providers.py   # Static provider catalog (96 entries: omp roster + mesh lanes) + validation
+  providers.py   # Static provider catalog (98 entries: omp roster + mesh lanes + LAN endpoints) + validation
   limits.py      # Usage snapshots: real API fetchers + manual-check fallback
   omp.py         # omp adapter: agent.db credentials + config.yml model roles
   serve.py       # LAN HTTP config server (mar serve)
@@ -98,3 +107,5 @@ PLAN.md          # milestones + acceptance criteria; update when scope changes
 - If `cli.py` surface changed: `uv run mar <cmd> --help` and one real
   invocation against a `MAR_HOME` in `tmp` exercised it.
 - PLAN.md updated if scope moved.
+- If `src/` changed: the `swarm-mar` container rebuilt/redeployed and the
+  change observed in `curl -fsS http://127.0.0.1:8930/config.sh`.

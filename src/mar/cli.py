@@ -14,12 +14,16 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml
+
 from mar import __version__, bootstrap, limits, omp, providers, registry, store, vault
 
 PROVIDER_IDS = providers.ids()
 
 _EXPORT_BEGIN = "# ================================================================ BEGIN =========================="
 _EXPORT_END = "# ================================================================ END ============================"
+"""Default Hindsight API the global memory config points at (LAN hub host)."""
+DEFAULT_GLOBAL_MEMORY_URL = "http://hub.nj02.gurov.us:8888"
 
 
 def _backend_flag(parser: argparse.ArgumentParser) -> None:
@@ -144,13 +148,27 @@ def _build_parser() -> argparse.ArgumentParser:
     p_exp.add_argument(
         "--output", default=None, metavar="PATH", help="write pastable to file instead of stdout"
     )
+    p_exp.add_argument(
+        "--memory",
+        choices=("on", "off"),
+        default="on",
+        help="global memory: 'on' configures the hindsight backend; "
+        "'off' emits memory.backend off (no memory on the box)",
+    )
+    p_exp.add_argument(
+        "--memory-url",
+        default=None,
+        metavar="URL",
+        help="hindsight API URL (default: $MAR_MEMORY_URL or "
+        f"{DEFAULT_GLOBAL_MEMORY_URL})",
+    )
     p_exp.add_argument("--registry", default=None, metavar="PATH")
     _backend_flag(p_exp)
     p_exp.set_defaults(func=_cmd_export)
 
     p_pull = sub.add_parser(
         "pull",
-        help="adopt OAuth logins from the local omp install into the registry",
+        help="adopt credentials from the local omp install (agent.db + .env) into the registry",
     )
     p_pull.add_argument("--agent-dir", default=None, metavar="PATH")
     p_pull.add_argument("--registry", default=None, metavar="PATH")
@@ -253,7 +271,16 @@ def _load(args: argparse.Namespace) -> registry.Registry:
 
 def _cmd_add(args: argparse.Namespace) -> int:
     key = sys.stdin.readline().strip() if args.key_stdin else args.key
-    if args.method == "api_key" and not key:
+    catalog_entry = providers.get(args.provider)
+    method = "none" if catalog_entry.auth_methods == ("none",) else args.method
+    if method == "none" and key:
+        print(
+            f"mar: {args.provider} is keyless (self-hosted endpoint at "
+            f"{catalog_entry.base_url}); drop --key/--key-stdin",
+            file=sys.stderr,
+        )
+        return 2
+    if method == "api_key" and not key:
         return _err("api_key auth requires --key or --key-stdin")
     models = list(args.model)
     if args.default and args.default not in models:
@@ -262,7 +289,7 @@ def _cmd_add(args: argparse.Namespace) -> int:
     reg.add(
         registry.Subscription(
             provider=args.provider,
-            auth_method=args.method,
+            auth_method=method,
             key=key,
             models=models,
             default_model=args.default,
@@ -272,7 +299,10 @@ def _cmd_add(args: argparse.Namespace) -> int:
         )
     )
     reg.save()
-    print(f"added {args.provider} (key: {registry.mask(key)})")
+    summary = f"key: {registry.mask(key) or 'keyless'}"
+    if args.default:
+        summary += f"; default model: {args.default}"
+    print(f"added {args.provider} ({summary})")
     return 0
 
 
@@ -323,7 +353,9 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         except KeyError:
             sub = None
         if pid in limits.supported():
-            if sub is None or not sub.key:
+            key = sub.key if sub is not None else None
+            keyless = bool(providers.get(pid).base_url)
+            if not key and not keyless:
                 print(
                     f"mar: {pid}: no api key stored; run: mar add {pid} --key-stdin",
                     file=sys.stderr,
@@ -331,7 +363,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
                 exit_code = 1
                 continue
             try:
-                snap = limits.fetch(pid, sub.key)
+                snap = limits.fetch(pid, key or "")
             except limits.LimitError as exc:
                 print(f"mar: {exc}", file=sys.stderr)
                 exit_code = 1
@@ -384,13 +416,63 @@ def _cmd_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ps_verbatim_arg(value: str) -> str:
+    """Quote one argument for a PowerShell ``--%`` stop-parsing line.
+
+    Windows PowerShell 5.1 through 7.2 use Legacy native-argument
+    passing, which drops embedded double quotes and mangles JSON values.
+    ``--%`` forwards the rest of the line verbatim; the value must already
+    be double-quoted with embedded quotes backslash-escaped for the native
+    argv parser. PowerShell 7.3+ re-escapes arguments even after ``--%``,
+    so it uses the plain string form instead.
+
+    Args:
+        value: Raw argument text, e.g. ``'{"a":"b"}'``.
+
+    Returns:
+        The double-quoted, backslash-escaped argument.
+    """
+    return '"' + value.replace('"', '\\"') + '"'
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
     reg = _load(args)
     pairs: list[tuple[str, str]] = []
+    # Endpoint vars are addresses, not secrets: they stay readable under --redact.
+    url_vars: set[str] = set()
     skipped: list[str] = []
     oauth_used = False
     oauth_expiries: list[tuple[str, int]] = []
+    declared: dict[str, dict[str, object]] = {}
     for sub in reg.active():
+        try:
+            provider = providers.get(sub.provider)
+        except KeyError:
+            skipped.append(f"skipped {sub.provider}: unknown provider (not in catalog)")
+            continue
+        if provider.base_url and provider.omp_base_url_env_var:
+            pairs.append((provider.omp_base_url_env_var, provider.base_url))
+            url_vars.add(provider.omp_base_url_env_var)
+            if provider.omp_models_api and provider.context_window and sub.models:
+                entry = omp.declared_provider_entry(
+                    provider.omp_provider_id,
+                    provider.base_url,
+                    list(sub.models),
+                    api=provider.omp_models_api,
+                    context_window=provider.context_window,
+                )
+                merged = declared.get(provider.omp_provider_id)
+                if merged is None:
+                    declared[provider.omp_provider_id] = entry
+                else:
+                    merged["models"].extend(entry["models"])
+        if sub.auth_method == "none":
+            if not provider.base_url:
+                skipped.append(
+                    f"skipped {sub.provider}: keyless provider without a "
+                    "catalog base_url"
+                )
+            continue
         if sub.auth_method == "oauth":
             try:
                 provider = providers.get(sub.provider)
@@ -410,14 +492,6 @@ def _cmd_export(args: argparse.Namespace) -> int:
             oauth_used = True
             oauth_expiries.append((sub.provider, sub.expires_at_ms))
             continue
-        if sub.auth_method != "api_key" or not sub.key:
-            skipped.append(f"skipped {sub.provider}: no api key stored")
-            continue
-        try:
-            provider = providers.get(sub.provider)
-        except KeyError:
-            skipped.append(f"skipped {sub.provider}: unknown provider (not in catalog)")
-            continue
         if not provider.export_env_var:
             skipped.append(
                 f"skipped {sub.provider}: no env route in omp; "
@@ -428,10 +502,20 @@ def _cmd_export(args: argparse.Namespace) -> int:
     if not pairs:
         return _err("nothing to export: no active subscriptions with exportable api keys")
     redact = getattr(args, "redact", False)
-    lines = [f"{var}={registry.mask(key) if redact else key}" for var, key in pairs]
-    notes = [
-        f"exported {len(pairs)} credential(s) ({args.shell}); then run: omp usage / omp --yolo"
+    lines = [
+        f"{var}={(key if var in url_vars else registry.mask(key)) if redact else key}"
+        for var, key in pairs
     ]
+    notes = [
+        f"exported {len(pairs)} line(s) ({args.shell}); then run: omp usage / omp --yolo"
+    ]
+    endpoints = [var for var, _ in pairs if var in url_vars]
+    if endpoints:
+        notes.append(
+            "self-hosted endpoint(s) exported: "
+            + ", ".join(endpoints)
+            + " (omp discovers the model from that server)"
+        )
     if redact:
         notes.append("REDACTED: key values are masked — preview only, NOT appliable")
     if oauth_used:
@@ -453,14 +537,20 @@ def _cmd_export(args: argparse.Namespace) -> int:
     notes.extend(skipped)
 
     # Pass through non-credential env lines from the local agent .env (e.g.
-    # LM_STUDIO_BASE_URL for a LAN LM Studio). Provider credential vars are
-    # excluded — the registry is authoritative for those and stale local
-    # copies must not leak or shadow rotated keys. Policy env vars ship
-    # statically below and are also skipped to avoid duplicates.
+    # LM_STUDIO_BASE_URL for a LAN LM Studio). Provider credential and
+    # endpoint vars are excluded — the registry/catalog is authoritative for
+    # those and stale local copies must not leak or shadow rotated values.
+    # Policy env vars ship statically below and are also skipped to avoid
+    # duplicates.
     provider_env_vars = {
         var
         for p in providers.CATALOG
-        for var in (p.omp_env_var, p.export_env_var, p.export_oauth_env_var)
+        for var in (
+            p.omp_env_var,
+            p.export_env_var,
+            p.export_oauth_env_var,
+            p.omp_base_url_env_var,
+        )
         if var
     } | {"PI_STRICT_EDIT_MODE"}
     source_agent_dir = Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
@@ -497,35 +587,120 @@ def _cmd_export(args: argparse.Namespace) -> int:
             + " (config.yml; skipped there if modelRoles already exists)"
         )
 
+    models_yaml = ""
+    if declared:
+        models_yaml = yaml.safe_dump({"providers": declared}, sort_keys=False, allow_unicode=True)
+        windows = sorted({int(entry["models"][0]["contextWindow"]) for entry in declared.values()})
+        notes.append(
+            "models.yml declares "
+            + ", ".join(sorted(declared))
+            + f" with contextWindow {windows[0]} (MAR-owned: export replaces the "
+            "file, omp-sync merges); omp's built-in lm-studio discovery would "
+            "fall back to 128k"
+        )
+
     # Edit policy: hashline everywhere; deepseek explicitly pinned (other
     # agent stacks silently downgrade deepseek to a weaker edit format).
-    settings_lines = [
-        "omp config set edit.mode hashline",
-        'omp config set edit.modelVariants \'{"deepseek":"hashline"}\'',
+    memory_enabled = getattr(args, "memory", "on") != "off"
+    memory_url = (
+        getattr(args, "memory_url", None)
+        or os.environ.get("MAR_MEMORY_URL")
+        or DEFAULT_GLOBAL_MEMORY_URL
+    )
+
+    # (key, value, json_value) — JSON args need per-shell quoting.
+    settings = [
+        ("edit.mode", "hashline", False),
+        ("edit.modelVariants", '{"deepseek":"hashline"}', True),
+        ("tools.approvalMode", "yolo", False),
+        ("task.agentAdvisor", '{"task":"off"}', True),
+        ("hideThinkingBlock", "true", False),
+        ("composer.tokenRate", "true", False),
     ]
+    if memory_enabled:
+        settings += [
+            ("memory.backend", "hindsight", False),
+            ("hindsight.apiUrl", memory_url, False),
+        ]
+    else:
+        settings.append(("memory.backend", "off", False))
+    settings_lines: list[str] = []
+    ps_scalar_lines: list[str] = []
+    ps_json_values: list[tuple[str, str]] = []
+    for key, value, json_value in settings:
+        if json_value:
+            settings_lines.append(f"omp config set {key} '{value}'")
+            ps_json_values.append((key, value))
+        else:
+            line = f"omp config set {key} {value}"
+            settings_lines.append(line)
+            ps_scalar_lines.append(line)
     notes.append(
         "edit policy: hashline strict (PI_STRICT_EDIT_MODE=1; model-family downgrades disabled)"
     )
-
-    # statusLine cloned from this machine so fresh boxes keep the hostname
-    # segment in the prompt display.
-    try:
-        status_line = omp.read_status_line(
-            Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
+    notes.append("approval pinned to yolo (matches omp default; explicit so defaults can't surprise)")
+    notes.append(
+        "vibe mode: run /vibe in the omp session (per-session toggle, no config key). "
+        "Approval is pinned to yolo; advisor engagement is pinned OFF for task/vibe "
+        "workers (opt in later: flip 'off' to 'on'); task/vibe worker routing follows "
+        "modelRoles.task (unset = default model)."
+    )
+    notes.append(
+        "thinking blocks hidden (display only; --hide-thinking is per-run; "
+        "flip with: omp config set hideThinkingBlock false)"
+    )
+    notes.append(
+        "generation rate display on (live tok/s readout; "
+        "flip with: omp config set composer.tokenRate false)"
+    )
+    if memory_enabled:
+        notes.append(
+            f"global memory: hindsight backend at {memory_url} "
+            "(toggle with --memory off to write memory.backend off)"
         )
-    except omp.OmpError as exc:
-        status_line = {}
-        notes.append(f"statusLine not exported: {exc}")
-    if status_line:
-        if "preset" in status_line:
-            settings_lines.append(f"omp config set statusLine.preset {status_line['preset']}")
-        for key in ("leftSegments", "rightSegments"):
-            if key in status_line:
-                value = json.dumps(status_line[key], separators=(",", ":"))
-                settings_lines.append(f"omp config set statusLine.{key} '{value}'")
-        notes.append("statusLine cloned (hostname stays in the prompt)")
     else:
-        notes.append("statusLine not exported: not set on this machine")
+        notes.append(
+            "memory disabled: memory.backend off "
+            "(the box will not use any memory backend)"
+        )
+
+    # Pin the display instead of cloning it: cloned segment lists drift across
+    # installs, and the built-in `model` segment shows a catalog display name
+    # (mixed case) rather than the API id. The extension below renders
+    # `provider/id` on its own line above the band.
+    status_line = omp.standard_status_line()
+    line = f"omp config set statusLine.preset {status_line['preset']}"
+    settings_lines.append(line)
+    ps_scalar_lines.append(line)
+    for key in ("leftSegments", "rightSegments"):
+        value = json.dumps(status_line[key], separators=(",", ":"))
+        settings_lines.append(f"omp config set statusLine.{key} '{value}'")
+        ps_json_values.append((f"statusLine.{key}", value))
+    notes.append("statusLine standardized (provider/id line via mar-statusline extension)")
+
+    # PowerShell 5.1-7.2 use Legacy native-argument passing, which drops the
+    # embedded quotes of a JSON string; there `--%` forwards the escaped form
+    # verbatim. PowerShell 7.3+ (Standard/Windows) re-escapes arguments after
+    # `--%`, so its correct form is the plain single-quoted string. Choose at
+    # run time: the preference variable is absent before 7.2.
+    ps_settings_lines: list[str] = [*ps_scalar_lines]
+    ps_settings_lines.append(
+        "$marNap = Get-Variable PSNativeCommandArgumentPassing"
+        " -ValueOnly -ErrorAction SilentlyContinue"
+    )
+    ps_settings_lines.append(
+        "if ($PSVersionTable.PSVersion.Major -lt 6 -or $null -eq $marNap"
+        " -or $marNap -eq 'Legacy') {"
+    )
+    ps_settings_lines.extend(
+        f"omp --% config set {key} {_ps_verbatim_arg(value)}"
+        for key, value in ps_json_values
+    )
+    ps_settings_lines.append("} else {")
+    ps_settings_lines.extend(
+        f"omp config set {key} '{value}'" for key, value in ps_json_values
+    )
+    ps_settings_lines.append("}")
 
     # omp's curl|sh installer drops the binary in ~/.local/bin, which is not
     # on PATH on many minimal Linux setups. bash only — bashrc is a bash file.
@@ -542,6 +717,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             ),
         ]
         notes.append("PATH: ~/.local/bin ensured for this session and .bashrc")
+    extension_lines = omp.status_line_extension().rstrip("\n").splitlines()
 
     if args.shell == "fish":
         env_lines = [*lines, "PI_STRICT_EDIT_MODE=1"]
@@ -581,8 +757,21 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 *lines,
                 "PI_STRICT_EDIT_MODE=1",
                 '\'@ | Set-Content "$env:USERPROFILE\\.omp\\agent\\.env" -Encoding ascii',
+                'New-Item -ItemType Directory -Force "$env:USERPROFILE\\.omp\\agent\\extensions" | Out-Null',
+                "@'",
+                *extension_lines,
+                '\'@ | Set-Content "$env:USERPROFILE\\.omp\\agent\\extensions\\mar-statusline.js" -Encoding ascii',
             ]
         )
+        if models_yaml:
+            body = "\n".join(
+                [
+                    body,
+                    "@'",
+                    *models_yaml.rstrip("\n").splitlines(),
+                    '\'@ | Set-Content "$env:USERPROFILE\\.omp\\agent\\models.yml" -Encoding ascii',
+                ]
+            )
         if role_lines:
             body = "\n".join(
                 [
@@ -596,17 +785,29 @@ def _cmd_export(args: argparse.Namespace) -> int:
                     "if ((Test-Path $cfg) -and -not (Select-String -Path $cfg -Pattern '(?m)^modelRoles:' -Quiet)) { if (-not (Get-Content $cfg -Raw).EndsWith(\"`n\")) { Add-Content $cfg '' }; Add-Content $cfg $roles }",
                 ]
             )
-        body = "\n".join([body, *settings_lines])
+        body = "\n".join([body, *ps_settings_lines])
     else:
         body = "\n".join(
             [
-                "mkdir -p ~/.omp/agent",
+                "mkdir -p ~/.omp/agent/extensions",
                 "cat > ~/.omp/agent/.env <<'MAR_EOF'",
                 *lines,
                 "PI_STRICT_EDIT_MODE=1",
                 "MAR_EOF",
+                "cat > ~/.omp/agent/extensions/mar-statusline.js <<'MAR_STATUSLINE_EOF'",
+                *extension_lines,
+                "MAR_STATUSLINE_EOF",
             ]
         )
+        if models_yaml:
+            body = "\n".join(
+                [
+                    body,
+                    "cat > ~/.omp/agent/models.yml <<'MAR_MODELS_EOF'",
+                    *models_yaml.rstrip("\n").splitlines(),
+                    "MAR_MODELS_EOF",
+                ]
+            )
         if role_lines:
             roles_text = "\\n".join(["modelRoles:", *role_lines])
             body = "\n".join(
@@ -640,12 +841,37 @@ def _cmd_export(args: argparse.Namespace) -> int:
 def _cmd_pull(args: argparse.Namespace) -> int:
     agent_dir = Path(args.agent_dir) if args.agent_dir else omp.default_agent_dir()
     creds = omp.read_oauth_credentials(agent_dir)
-    if not creds:
-        return _err(f"no oauth credentials found in {agent_dir / 'agent.db'}")
+    env_values = omp.read_env_credentials(agent_dir)
     by_omp_id = {p.omp_provider_id: p for p in providers.CATALOG if p.omp_provider_id}
     reg = _load(args)
     pulled = 0
     seen: set[str] = set()
+
+    def store(
+        provider_id: str, auth_method: str, key: str, expires_ms: int, notes: str
+    ) -> None:
+        nonlocal pulled
+        try:
+            old = reg.get(provider_id)
+        except KeyError:
+            old = None
+        else:
+            reg.remove(provider_id)
+        reg.add(
+            registry.Subscription(
+                provider=provider_id,
+                auth_method=auth_method,
+                key=key,
+                models=old.models if old else [],
+                default_model=old.default_model if old else None,
+                added_at=_now(),
+                status=old.status if old else "active",
+                notes=notes,
+                expires_at_ms=expires_ms,
+            )
+        )
+        pulled += 1
+
     for cred in creds:
         provider = by_omp_id.get(cred.provider)
         if provider is None:
@@ -669,29 +895,46 @@ def _cmd_pull(args: argparse.Namespace) -> int:
         notes += ")"
         if expires:
             notes += f"; expires {expires}; re-pull to refresh"
-        try:
-            old = reg.get(provider.id)
-        except KeyError:
-            old = None
-        else:
-            reg.remove(provider.id)
-        reg.add(
-            registry.Subscription(
-                provider=provider.id,
-                auth_method="oauth",
-                key=cred.access,
-                models=old.models if old else [],
-                default_model=old.default_model if old else None,
-                added_at=_now(),
-                status=old.status if old else "active",
-                notes=notes,
-                expires_at_ms=cred.expires_ms,
-            )
-        )
-        pulled += 1
+        store(provider.id, "oauth", cred.access, cred.expires_ms, notes)
         print(f"pulled: {provider.id} ({cred.provider}) — expires {expires or 'unknown'}")
+
+    # omp also accepts credentials through <agent_dir>/.env (its environment
+    # fallback); on env-configured installs agent.db holds no rows at all.
+    # agent.db OAuth rows above win because they carry refresh metadata.
+    for provider in providers.CATALOG:
+        if provider.id in seen:
+            continue
+        candidates = [
+            (provider.omp_env_var, "api_key"),
+            (provider.export_env_var, "api_key"),
+        ]
+        if provider.export_oauth_env_var and (
+            provider.export_oauth_env_var != provider.export_env_var
+        ):
+            candidates.insert(0, (provider.export_oauth_env_var, "oauth"))
+        for var, auth_method in candidates:
+            key = env_values.get(var) if var else None
+            if not key:
+                continue
+            kind = "oauth" if auth_method == "oauth" else "api key"
+            store(
+                provider.id,
+                auth_method,
+                key,
+                0,
+                f"{kind} via mar pull (.env {var})",
+            )
+            seen.add(provider.id)
+            print(f"pulled: {provider.id} (.env {var})")
+            break
+
+    if not pulled:
+        return _err(
+            f"no credentials found in {agent_dir / 'agent.db'} or {agent_dir / '.env'}"
+            " (log in with omp first, e.g. omp login anthropic)"
+        )
     reg.save()
-    return 0 if pulled else 1
+    return 0
 
 
 def _cmd_rotate(args: argparse.Namespace) -> int:

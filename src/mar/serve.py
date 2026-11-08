@@ -1,36 +1,55 @@
-"""LAN HTTP server that serves MAR's omp config payloads.
+"""LAN HTTP server that serves MAR's omp config payloads and service status.
 
-Endpoints (all GET, all text):
+Endpoints (all GET):
+    /           — HTML page: apply commands with copy buttons, configured
+                  services with quotas/renewals/usage links, repo link
     /config.sh  — bash export payload (BEGIN/END markers stripped)
     /config.ps1 — powershell export payload (BEGIN/END stripped)
-    /config.fish — fish payload (set -gx env lines + .env persistence)
+    /config.fish — fish export payload (BEGIN/END markers stripped)
 
 Payloads are generated fresh per request from the registry, so what a
 machine fetches always matches the current ``mar export`` output — updated
 configs on demand for boxes that already have omp installed. The server
-never mutates anything and holds no state.
+never mutates anything.
 """
 
 from __future__ import annotations
 
 import contextlib
+import html as html_mod
 import io
+import json
+import os
 import socket
+import subprocess
+import threading
+import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from mar import cli
+from mar import cli, limits, providers
+
+REPO_URL = "https://github.com/ggurov/MAR"
+HINDSIGHT_DASHBOARD_URL = "http://hub.nj02.gurov.us:9999/dashboard"
+_USAGE_TTL_SECONDS = 60.0
+_usage_cache: dict[str, tuple[float, str]] = {}
+_usage_locks: dict[str, threading.Lock] = {}
+_usage_locks_guard = threading.Lock()
 
 
-def render_config(registry: Path, shell: str, backend: str | None = None) -> str:
+def render_config(
+    registry: Path, shell: str, backend: str | None = None, memory: str = "on"
+) -> str:
     """Render the ``mar export`` payload for one shell, minus the markers.
 
     Args:
-        registry: Path to the MAR registry file (read fresh per call; the
-            file backend is forced when this path is used).
+        registry: Path to the MAR registry file.
         shell: ``"bash"``, ``"powershell"``, or ``"fish"``.
-        backend: Optional storage backend name passed through to the export
-            command (``vault`` reads the registry from Vault instead).
+        backend: Optional storage backend name; when given it is passed
+            through, otherwise the file backend is forced via the path.
+        memory: ``"on"`` (default) configures the global hindsight backend;
+            ``"off"`` writes ``memory.backend off`` so the box stops using memory.
 
     Returns:
         The payload body exactly as ``mar export`` prints between the
@@ -38,10 +57,8 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         warnings) are discarded — they are written for the human running
         MAR, not the machine piping this into a shell.
 
-    Notes:
-        An empty registry renders as an empty payload — ``mar export``
-        exits 1 with no output for an empty registry and stdout is what
-        becomes the payload.
+    Raises:
+        SystemExit: Propagated from ``mar export`` on an empty registry.
     """
     out, err = io.StringIO(), io.StringIO()
     argv = ["export", "--shell", shell]
@@ -49,6 +66,7 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         argv += ["--backend", backend]
     else:
         argv += ["--registry", str(registry)]
+    argv += ["--memory", memory]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         cli.main(argv)
     lines = [
@@ -57,6 +75,532 @@ def render_config(registry: Path, shell: str, backend: str | None = None) -> str
         if not (line.startswith("# ===") and ("BEGIN" in line or "END" in line))
     ]
     return "\n".join(lines).strip("\n")
+
+
+def _provider_usage_lock(provider: str) -> threading.Lock:
+    """Return the per-provider lock guarding one live usage fetch."""
+    with _usage_locks_guard:
+        return _usage_locks.setdefault(provider, threading.Lock())
+
+
+def _fetch_usage_cell(provider: str, key: str | None) -> str:
+    """Fetch one provider's live quota cell.
+
+    Raises:
+        Exception: Any fetch/parse failure (callers decide the fallback).
+    """
+    snapshot = limits.fetch(provider, key or "", timeout=5.0)
+    if snapshot.items:
+        item = snapshot.items[0]
+        if item.limit is not None:
+            return f"${item.limit - (item.used or 0):.2f} left"
+        return f"${item.used or 0:.2f} used"
+    return snapshot.note or "ok"
+
+
+def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | None:
+    """Refresh one provider's quota cell in the background, single-flight.
+
+    Returns:
+        The started thread, or ``None`` when a refresh is already running.
+    """
+    lock = _provider_usage_lock(provider)
+    if not lock.acquire(blocking=False):
+        return None
+    cache = _usage_cache
+    previous = cache.get(provider)
+
+    def worker() -> None:
+        try:
+            cell = _fetch_usage_cell(provider, key)
+        except Exception:  # noqa: BLE001 — keep the last good cell
+            cell = previous[1] if previous is not None else "unavailable"
+        finally:
+            cache[provider] = (time.monotonic(), cell)
+            lock.release()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
+def _usage_cell(provider: str, key: str | None) -> str | None:
+    """Return the live quota text for one provider, cached and non-blocking.
+
+    Every ``limits_kind == "api"`` catalog entry is fetched: OpenRouter
+    reports credits (rendered as dollars), Gemini reports key liveness, and
+    the self-hosted ``strata`` engine reports its loaded model — for
+    fetchers without numeric items the snapshot's own ``note`` is the cell.
+
+    A fresh cache entry is returned directly. A stale entry is returned
+    immediately while a single background refresh runs, so rendering the
+    page never waits on a provider API. Only the first call for a provider
+    fetches synchronously; if another refresh already holds the provider
+    lock, ``None`` is returned so the page still renders fast.
+
+    Args:
+        provider: Catalog id.
+        key: The provider credential used for the live fetch (unused by
+            keyless endpoints).
+
+    Returns:
+        Human quota text, e.g. ``"$315.00 left"``; ``None`` when the
+        provider has no live fetcher or a refresh is already in flight.
+        Fetch failures degrade to ``"unavailable"`` (or keep the last
+        good cell when refreshing in the background).
+    """
+    try:
+        entry = providers.get(provider)
+    except KeyError:
+        return None
+    if entry.limits_kind != "api":
+        return None
+    now = time.monotonic()
+    cached = _usage_cache.get(provider)
+    if cached is not None and now - cached[0] < _USAGE_TTL_SECONDS:
+        return cached[1]
+    if cached is not None:
+        _refresh_usage_async(provider, key)
+        return cached[1]
+    lock = _provider_usage_lock(provider)
+    if not lock.acquire(blocking=False):
+        return None
+    try:
+        cell = _fetch_usage_cell(provider, key)
+    except Exception:  # noqa: BLE001 — a dead usage API must never 500 the page
+        cell = "unavailable"
+    finally:
+        _usage_cache[provider] = (time.monotonic(), cell)
+        lock.release()
+    return cell
+
+
+_OMP_TTL_SECONDS = 300.0
+_omp_cache: dict = {}
+_omp_refresh_lock = threading.Lock()
+
+
+def _run_omp_usage() -> dict:
+    """Invoke ``omp usage --json`` and return the parsed document.
+
+    Returns:
+        The ``omp usage --json`` document (``reports`` keyed by provider).
+
+    Raises:
+        OSError: If ``omp`` cannot be executed.
+        ValueError: If the output is not JSON.
+    """
+
+    done = subprocess.run(
+        ["omp", "usage", "--json"],
+        capture_output=True,
+        text=True,
+        timeout=150,
+        check=True,
+    )
+    return json.loads(done.stdout)
+
+
+def _refresh_omp_usage_async() -> threading.Thread | None:
+    """Refresh ``omp usage`` in the background, single-flight.
+
+    Returns:
+        The started thread, or ``None`` when a refresh is already running.
+    """
+    if not _omp_refresh_lock.acquire(blocking=False):
+        return None
+    cache = _omp_cache
+
+    def worker() -> None:
+        reports: dict[str, list] | None = None
+        try:
+            data = _run_omp_usage()
+            reports = {r["provider"]: r.get("limits", []) for r in data.get("reports", [])}
+        except Exception:  # noqa: BLE001 — keep the last good snapshot
+            reports = None
+        finally:
+            cache["ts"] = time.monotonic()
+            if reports is not None:
+                cache["data"] = reports
+            _omp_refresh_lock.release()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
+def _omp_usage() -> dict[str, list]:
+    """Return omp's usage reports, cached for :data:`_OMP_TTL_SECONDS`.
+
+    Fresh data is returned directly. Stale data is returned immediately
+    while a single background refresh runs, so a page render never waits
+    on ``omp usage``. With no cache at all the call fetches synchronously
+    unless another refresh is already in flight, in which case it returns
+    an empty mapping so the page still renders fast.
+
+    Returns:
+        Mapping of omp provider id to its ``limits`` list (possibly empty).
+    """
+    now = time.monotonic()
+    cache = _omp_cache
+    data = cache.get("data")
+    ts = cache.get("ts")
+    if data is not None and ts is not None and now - ts < _OMP_TTL_SECONDS:
+        return data
+    if data is not None:
+        _refresh_omp_usage_async()
+        return data
+    if not _omp_refresh_lock.acquire(blocking=False):
+        return {}
+    try:
+        raw = _run_omp_usage()
+        reports = {r["provider"]: r.get("limits", []) for r in raw.get("reports", [])}
+    except Exception:  # noqa: BLE001 — degrade to the last good snapshot
+        reports = {}
+    finally:
+        cache["ts"] = time.monotonic()
+        cache["data"] = reports
+        _omp_refresh_lock.release()
+    return reports
+
+
+def _omp_id_map() -> dict[str, str]:
+    """Map catalog provider id → omp provider id (when one exists)."""
+    return {
+        p.id: p.omp_provider_id for p in providers.CATALOG if p.omp_provider_id
+    }
+
+
+def _format_duration(hours: float) -> str:
+    """Format a window reset countdown for the quota cell.
+
+    Args:
+        hours: Hours until the window resets; negative once past.
+
+    Returns:
+        ``"now"`` when ``hours <= 0``; ``"2.0h"`` under 48 hours;
+        ``"~8 days"`` beyond that.
+    """
+    if hours <= 0:
+        return "now"
+    if hours < 48:
+        return f"{hours:.1f}h"
+    days = round(hours / 24)
+    return f"~{days} day" if days == 1 else f"~{days} days"
+
+
+def _format_limits(items: list[dict]) -> tuple[str | None, int | None]:
+    """Format omp usage limits into one quota cell plus earliest reset.
+
+    Every window contributes a piece: quantified windows render their
+    amount plus a parenthesized reset when the window reports one, and
+    reset-only windows render as ``"<label> resets in X"``.
+
+    Args:
+        items: The ``limits`` list of one ``omp usage`` report.
+
+    Returns:
+        ``(cell, earliest_reset_ms)`` where ``cell`` is like
+        ``"5h 100% · 7d 40% (resets in 4.0h)"`` (a window with a cap but
+        no remaining renders its ``usedFraction`` as ``"5h 7% used"``,
+        or its bare cap as ``"5h 14 cr"`` without one; ``None`` when
+        every window lacks both an amount and a reset) and
+        ``earliest_reset_ms`` is the soonest window reset (``None`` when
+        no window reports one).
+    """
+    parts: list[str] = []
+    earliest: int | None = None
+    now = time.time()
+    for item in items:
+        amount = item.get("amount") or {}
+        remaining, cap, unit = amount.get("remaining"), amount.get("limit"), (amount.get("unit") or "")
+        window = item.get("window") or {}
+        reset = window.get("resetsAt")
+        if reset is not None and (earliest is None or reset < earliest):
+            earliest = int(reset)
+        resets = ""
+        if reset is not None:
+            resets = f"resets in {_format_duration((reset / 1000 - now) / 3600)}"
+        label = item.get("id", "?").rsplit(":", 1)[-1]
+        if remaining is None and cap is None:
+            if resets:
+                parts.append(f"{label} {resets}")
+            continue
+        used_fraction = amount.get("usedFraction")
+        if remaining is None and used_fraction is not None:
+            # commandcode windows: cap plus used fraction, no absolute remaining
+            base = f"{label} {used_fraction * 100:.0f}% used"
+        elif unit == "percent":
+            base = f"{label} {(remaining or 0):.0f}%"
+        elif unit == "usd":
+            base = f"{label} ${(remaining or 0):.2f}"
+        else:
+            suffix = "cr" if unit.startswith("cre") else ("req" if unit.startswith("req") else unit)
+            if remaining is None:
+                base = f"{label} {cap:g} {suffix}".rstrip()
+            elif cap:
+                base = f"{label} {remaining:g}/{cap:g} {suffix}".rstrip()
+            else:
+                rem = f"{remaining:.2f}" if suffix == "cr" else f"{remaining:g}"
+                base = f"{label} {rem} {suffix}".rstrip()
+        parts.append(f"{base} ({resets})" if resets else base)
+    return (" \u00b7 ".join(parts) if parts else None), earliest
+
+
+def _format_renew(hours: float) -> str:
+    """Format an oauth token's remaining lifetime for the Renews cell.
+
+    Args:
+        hours: Hours until the token expires; negative once past.
+
+    Returns:
+        ``EXPIRED`` when ``hours <= 0``; ``in 7.9h`` under 48 hours;
+        ``in ~N days`` under a year; ``""`` for longer-lived tokens,
+        whose expiry is far enough out to read as non-expiring.
+    """
+    if hours <= 0:
+        return "EXPIRED"
+    if hours < 48:
+        return f"in {hours:.1f}h"
+    if hours < 8760:
+        days = round(hours / 24)
+        return f"in ~{days} day" if days == 1 else f"in ~{days} days"
+    return ""
+
+def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
+    """Collect one row per active subscription for the services panel.
+
+    Args:
+        registry: Path to the MAR registry file (file backend).
+
+    Returns:
+        One dict per active subscription with keys ``provider``,
+        ``auth``, ``usage`` (quota text from ``omp usage`` windows —
+        each window carries its own ``resets in X`` countdown — else the
+        live fetch for any ``limits_kind == "api"`` catalog entry, which
+        for a self-hosted endpoint reports its loaded model; ``None`` when
+        a provider reports neither), ``renew`` (oauth token expiry only:
+        ``in 7.9h`` under 48 hours, ``in ~N days`` under a year, ``""``
+        for longer-lived tokens, ``EXPIRED`` once past; empty string when
+        nothing expires), ``limits_url``, and ``endpoint`` (the catalog
+        ``base_url`` for a self-hosted entry, else ``""``).
+    """
+    rows: list[dict[str, str | None]] = []
+    reg = cli.registry.Registry.load(registry)
+    id_map = _omp_id_map()
+    usage_map = _omp_usage()
+    for sub in reg.active():
+        try:
+            entry = providers.get(sub.provider)
+        except KeyError:
+            entry = None
+        limits_url = entry.limits_url if entry else ""
+        omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
+        quota, _ = _format_limits(omp_limits)
+        if quota is None:
+            quota = _usage_cell(sub.provider, sub.key)
+        if sub.auth_method == "oauth" and sub.expires_at_ms:
+            hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
+            renew = _format_renew(hours)
+        else:
+            renew = ""
+        rows.append(
+            {
+                "provider": sub.provider,
+                "auth": sub.auth_method,
+                "usage": quota,
+                "renew": renew,
+                "limits_url": limits_url,
+                "endpoint": entry.base_url if entry else "",
+            }
+        )
+    return rows
+
+
+def render_index_html(host: str, registry: Path) -> str:
+    """Render the landing page for one reachable ``host:port``.
+
+    Args:
+        host: ``host:port`` as the client reached the server (Host header).
+        registry: Path to the MAR registry file for the services panel.
+
+    Returns:
+        A complete HTML5 document: apply commands for sh and PowerShell
+        with copy-to-clipboard buttons, the configured-services table
+        (quota, renewal, provider usage link), a plaintext-HTTP warning, and the
+        GitHub repo link.
+    """
+    sh_cmd = f"curl -fsSL http://{host}/config.sh?memory=on | sh"
+    ps_cmd = f"irm http://{host}/config.ps1?memory=on | iex"
+    fish_cmd = f"curl -fsSL http://{host}/config.fish?memory=on | fish"
+    memory_url = os.environ.get("MAR_MEMORY_URL") or cli.DEFAULT_GLOBAL_MEMORY_URL
+    dashboard_link = (
+        f'<a href="{HINDSIGHT_DASHBOARD_URL}" target="_blank"'
+        ' rel="noopener">Open Hindsight dashboard</a>'
+    )
+    rows_html: list[str] = []
+    for row in services_snapshot(registry):
+        usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
+        name = html_mod.escape(row["provider"])
+        link = row["limits_url"] or row["endpoint"]
+        if link:
+            provider = (
+                f'<a href="{html_mod.escape(link)}" target="_blank"'
+                f' rel="noopener"><b>{name}</b></a>'
+            )
+        else:
+            provider = f"<b>{name}</b>"
+        renew = html_mod.escape(row["renew"])
+        if "EXPIRED" in renew:
+            renew = f'<span class="expired">{renew}</span>'
+        rows_html.append(
+            f"<tr><td>{provider}</td>"
+            f"<td>{row['auth']}</td>"
+            f"<td class=\"mono\">{usage}</td>"
+            f"<td>{renew}</td></tr>"
+        )
+    ips = "".join(f"<li><code>{ip}</code></li>" for ip in lan_ips())
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAR config server</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; min-height:100vh; display:flex; justify-content:center;
+         background:#0d1117; color:#e6edf3; font:15px/1.55 system-ui,-apple-system,sans-serif; }}
+  main {{ width:100%; max-width:1300px; padding:36px 32px; }}
+  h1 {{ font-size:19px; margin:0 0 2px; }}
+  h1 span {{ color:#58a6ff; }}
+  .sub {{ color:#8b949e; margin:0 0 22px; font-size:14px; }}
+  .card {{ background:#161b22; border:1px solid #30363d; border-radius:10px;
+           padding:16px 18px; margin-bottom:14px; }}
+  .card h2 {{ font-size:12px; margin:0 0 10px; text-transform:uppercase;
+              letter-spacing:.07em; color:#8b949e; }}
+  code.cmd {{ display:block; background:#0d1117; border:1px solid #30363d; border-radius:6px;
+              padding:10px 12px; font:13px/1.4 ui-monospace,Consolas,monospace;
+              overflow-x:auto; white-space:nowrap; }}
+  .row {{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }}
+  button {{ background:#238636; color:#fff; border:0; border-radius:6px; padding:7px 14px;
+            font:600 13px system-ui; cursor:pointer; }}
+  button:hover {{ background:#2ea043; }}
+  button.ghost {{ background:#21262d; border:1px solid #30363d; }}
+  button.ghost:hover {{ background:#30363d; }}
+  button.copied {{ background:#1f6feb; }}
+  .note {{ font-size:13px; color:#8b949e; margin:8px 0 0; }}
+  .warn {{ color:#d29922; }}
+  .expired {{ color:#f85149; font-weight:600; }}
+  a {{ color:#58a6ff; text-decoration:none; }}
+  a:hover {{ text-decoration:underline; }}
+  table {{ width:100%; border-collapse:collapse; font-size:13.5px; }}
+  th, td {{ text-align:left; padding:6px 8px; border-bottom:1px solid #21262d; }}
+  th {{ color:#8b949e; font-weight:600; font-size:12px; text-transform:uppercase;
+        letter-spacing:.05em; }}
+  td.mono {{ font-family:ui-monospace,Consolas,monospace; }}
+  ul {{ margin:6px 0 0; padding-left:18px; color:#8b949e; font-size:13px; }}
+  footer {{ margin-top:20px; font-size:13px; color:#8b949e; }}
+</style>
+</head>
+<body>
+<main>
+  <h1>MAR <span>·</span> config server</h1>
+  <p class="sub">Pushes your provider keys, model roles, and omp policy to boxes on this LAN.
+     Boxes must already have <strong>omp</strong> installed.</p>
+
+  <div class="card">
+    <h2>Linux / macOS</h2>
+    <code class="cmd" id="sh-cmd">{sh_cmd}</code>
+    <div class="row">
+      <button onclick="copyEl('sh-cmd', this)">Copy command</button>
+      <button class="ghost" onclick="copyFetch('/config.sh?memory='+memParam(), this)">Copy payload</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Windows (PowerShell)</h2>
+    <code class="cmd" id="ps-cmd">{ps_cmd}</code>
+    <div class="row">
+      <button onclick="copyEl('ps-cmd', this)">Copy command</button>
+      <button class="ghost" onclick="copyFetch('/config.ps1?memory='+memParam(), this)">Copy payload</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Fish</h2>
+    <code class="cmd" id="fish-cmd">{fish_cmd}</code>
+    <div class="row">
+      <button onclick="copyEl('fish-cmd', this)">Copy command</button>
+      <button class="ghost" onclick="copyFetch('/config.fish?memory='+memParam(), this)">Copy payload</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Global memory</h2>
+    <label style="display:flex; gap:8px; align-items:center; font-weight:600;">
+      <input type="checkbox" id="global-memory" checked> configure global memory
+    </label>
+    <p class="note">Checked: the payload sets <code>memory.backend = hindsight</code> pointed at
+       <code>{memory_url}</code>. Unchecked: it sets <code>memory.backend = off</code>, so the
+       box is unconfigured from using memory.</p>
+    <p class="note">{dashboard_link}</p>
+  </div>
+
+  <div class="card">
+    <h2>Services</h2>
+    <table>
+      <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th></tr>
+      {''.join(rows_html)}
+    </table>
+    <p class="note"><span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
+       LAN only; the firewall rule scopes this port to LocalSubnet.</p>
+    <p class="note">oauth renews by re-login — <code>omp login &lt;provider&gt;</code> on the
+       box (omp stores the fresh token), then <code>mar pull</code> adopts it here. Don't
+       switch to API keys: API billing is a separate tier from your subscription quota.</p>
+  </div>
+
+  <footer>
+    <a href="{REPO_URL}">{REPO_URL}</a> · this server:
+    <ul style="display:inline; padding:0; list-style:none">{ips}</ul>
+  </footer>
+</main>
+<script>
+async function copyText(t, btn) {{
+  try {{ await navigator.clipboard.writeText(t); }}
+  catch (e) {{
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+  }}
+  const old = btn.textContent;
+  btn.textContent = 'Copied ✓'; btn.classList.add('copied');
+  setTimeout(() => {{ btn.textContent = old; btn.classList.remove('copied'); }}, 1400);
+}}
+function copyEl(id, btn) {{ copyText(document.getElementById(id).textContent.trim(), btn); }}
+async function copyFetch(path, btn) {{
+  const r = await fetch(path);
+  copyText(await r.text(), btn);
+}}
+function memParam() {{
+  return document.getElementById('global-memory').checked ? 'on' : 'off';
+}}
+function refreshCommands() {{
+  const HOST = "{host}";
+  document.getElementById('sh-cmd').textContent =
+    'curl -fsSL http://' + HOST + '/config.sh?memory=' + memParam() + ' | sh';
+  document.getElementById('ps-cmd').textContent =
+    'irm http://' + HOST + '/config.ps1?memory=' + memParam() + ' | iex';
+  document.getElementById('fish-cmd').textContent =
+    'curl -fsSL http://' + HOST + '/config.fish?memory=' + memParam() + ' | fish';
+}}
+document.getElementById('global-memory').addEventListener('change', refreshCommands);
+refreshCommands();
+</script>
+</body>
+</html>
+"""
 
 
 def lan_ips() -> list[str]:
@@ -89,10 +633,8 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
 
     Args:
         registry: Path to the MAR registry file, read per request (used
-            when ``backend`` is None).
-        backend: Optional storage backend name forwarded to the export
-            command per request (``vault`` reads from Vault instead of the
-            file).
+            unless a ``backend`` is given).
+        backend: Optional storage backend name (see ``render_config``).
 
     Returns:
         A ``BaseHTTPRequestHandler`` subclass serving the endpoints.
@@ -109,47 +651,33 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
 
         def do_GET(self) -> None:  # stdlib naming convention
             host = self.headers.get("Host", "localhost")
-            if self.path == "/config.sh":
+            parsed = urllib.parse.urlsplit(self.path)
+            memory = (
+                "off"
+                if urllib.parse.parse_qs(parsed.query).get("memory") == ["off"]
+                else "on"
+            )
+            if parsed.path == "/config.sh":
                 self._send(
                     200,
-                    render_config(registry, "bash", backend),
+                    render_config(registry, "bash", backend, memory),
                     "text/x-shellscript; charset=utf-8",
                 )
-            elif self.path == "/config.fish":
+            elif parsed.path == "/config.fish":
                 self._send(
                     200,
-                    render_config(registry, "fish"),
+                    render_config(registry, "fish", backend, memory),
                     "text/x-fish; charset=utf-8",
                 )
-            elif self.path == "/config.ps1":
+            elif parsed.path == "/config.ps1":
                 self._send(
                     200,
-                    render_config(registry, "powershell", backend),
+                    render_config(registry, "powershell", backend, memory),
                     "text/plain; charset=utf-8",
                 )
-            elif self.path == "/":
-                ips = "\n".join(f"  http://{ip}" for ip in lan_ips())
+            elif parsed.path == "/":
                 self._send(
-                    200,
-                    "\n".join(
-                        [
-                            "MAR config server (LAN only, plain HTTP)",
-                            "",
-                            "Apply the current config on a box with omp:",
-                            f"  curl -fsSL http://{host}/config.sh | sh",
-                            "",
-                            "Windows box (PowerShell):",
-                            "  irm http://<this-host>/config.ps1 | iex",
-                            "",
-                            "Fish box:",
-                            f"  curl -fsSL http://{host}/config.fish | fish",
-                            "",
-                            "This server's addresses:",
-                            ips,
-                            "",
-                        ]
-                    ),
-                    "text/plain; charset=utf-8",
+                    200, render_index_html(host, registry), "text/html; charset=utf-8"
                 )
             else:
                 self._send(404, "not found\n", "text/plain; charset=utf-8")
@@ -160,6 +688,18 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
     return Handler
 
 
+def _warm_caches(registry: Path) -> None:
+    """Populate the usage caches once at startup, best-effort.
+
+    Args:
+        registry: Path to the MAR registry file.
+    """
+    try:
+        services_snapshot(registry)
+    except Exception:  # noqa: BLE001 — warming must never break startup
+        return
+
+
 def serve(host: str, port: int, registry: Path, backend: str | None = None) -> None:
     """Run the config server until interrupted.
 
@@ -167,12 +707,15 @@ def serve(host: str, port: int, registry: Path, backend: str | None = None) -> N
         host: Bind address (``0.0.0.0`` for LAN reachability).
         port: TCP port to listen on.
         registry: Path to the MAR registry file (file backend).
-        backend: Optional storage backend name (see ``make_handler``).
+        backend: Optional storage backend name.
 
     Raises:
         OSError: If the port cannot be bound.
     """
-    server = ThreadingHTTPServer((host, port), make_handler(registry, backend=backend))
+    # Warm the usage caches in the background — the first page view
+    # should not wait on a full provider sweep.
+    threading.Thread(target=_warm_caches, args=(registry,), daemon=True).start()
+    server = ThreadingHTTPServer((host, port), make_handler(registry, backend))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

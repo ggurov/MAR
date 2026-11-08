@@ -67,7 +67,7 @@ mar add cursor-grok --key "crsr_xxxxxxxxxxxxxxxxxxxxxxxx"
 # OAuth providers (Claude, Codex): log in once with omp, then adopt the tokens:
 omp login anthropic        # browser flow, token lands in omp's agent.db
 omp login openai-codex
-mar pull                   # mar pulls those tokens into its registry
+mar pull                   # adopt tokens + keys omp reads from its .env
 ```
 
 ### Check what you have
@@ -97,7 +97,7 @@ gemini (api):
   key alive: 62 models visible (45 gemini)
 
 PS> mar limits zai                 # no public API → exact pointer instead
-https://z.ai
+https://z.ai/manage-apikey/coding-plan/personal/usage
 Open this page and check usage manually.
 ```
 
@@ -145,8 +145,30 @@ Paste that into PowerShell on any machine with omp: credentials + judge/default
 roles, done. `--shell bash` emits the bash variant — it also adds `~/.local/bin`
 to `PATH` (live + `.bashrc`), since omp's `curl | sh` installs there and minimal
 Linux setups leave it off `PATH`. Both variants end with `omp config set` lines:
-hashline edit mode with deepseek pinned to it, and your machine's `statusLine`
-(preset + segments) so hostname stays in the prompt display. The block also sets
+hashline edit mode with deepseek pinned to it, and a fixed `statusLine`
+(preset + segments) so every install looks the same. The built-in `model`
+segment is removed — it prints a mixed-case catalog name, not the API id —
+and a tiny `mar-statusline.js` extension prints its glyph (the compact
+thinking symbol when the model exposes levels; otherwise the model icon)
+plus `provider/api-id` (the `/models` selector form) on its own line above
+the status band.
+The pastable also pins approval to yolo (`omp config set tools.approvalMode yolo` — matches
+omp's default; explicit so defaults can't surprise). Vibe mode itself is a
+per-session toggle: run `/vibe` in the omp session (no config key exists);
+advisor engagement is pinned OFF for task/vibe workers (`task.agentAdvisor` =
+`{"task":"off"}` — flip to `"on"` to let workers consult the advisor role);
+task/vibe worker routing follows `modelRoles.task` (unset = the default model).
+Thinking blocks are hidden by default (`hideThinkingBlock` = `true`,
+display-only — `--hide-thinking` is the per-run override; flip the config back
+to see them). The generation-rate readout is on by default
+(`composer.tokenRate` = `true` — live tok/s next to the session title; flip
+with `omp config set composer.tokenRate false`). Memory is wired to the collective's
+Hindsight server: the block pins `memory.backend` = `hindsight` and
+`hindsight.apiUrl` = `http://hub.nj02.gurov.us:8888`. Uncheck "configure global
+memory" in the web UI — or pass `mar export --memory off` — and the block instead
+pins `memory.backend` = `off`, unconfiguring the box from using memory. The Global
+memory card also links to the Hindsight dashboard at
+`http://hub.nj02.gurov.us:9999/dashboard`. The block also sets
 `PI_STRICT_EDIT_MODE=1` in the agent `.env` — omp's silent per-family fallback
 to `replace` (GLM Flash, DeepSeek, Kimi, …) is disabled, so a model that can't
 cope fails visibly instead of quietly downgrading. OAuth tokens in the
@@ -154,6 +176,12 @@ block expire (Anthropic ≈ 8h, Codex ≈ 10d) — re-run `mar pull && mar expor
 refresh; export warns when a token is already dead or dying. Skip notes
 (providers without env routes, e.g. antigravity → `/login google-antigravity`)
 print to stderr, never into the block.
+
+PowerShell JSON-valued config lines come in a version branch: 5.1-7.2 use the
+`--%` stop-parsing token (legacy native-argument passing strips embedded
+quotes), while 7.3+ uses the plain string form (it re-escapes arguments even
+after `--%`). The payload selects the branch at run time from
+`$PSNativeCommandArgumentPassing`.
 
 ### Start a session right
 
@@ -169,9 +197,9 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar list [--json]` | Active subscriptions, masked keys, default models |
 | `mar limits [provider]` | Real API checks (OpenRouter credits, Gemini key-liveness); exact pointers elsewhere |
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
-| `mar pull` | Adopt OAuth logins (Claude, Codex) from local omp into the registry |
-| `mar export [--shell bash\|fish\|powershell] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr |
-| `mar serve [--port N] [--host ADDR]` | Serve the export payloads over LAN HTTP; boxes apply with `curl -fsSL http://<this-box>:8930/config.sh \| sh` (or `/config.fish \| fish`, `/config.ps1` PowerShell) |
+| `mar pull` | Adopt credentials from the local omp install (`agent.db` OAuth logins + `.env` keys) into the registry |
+| `mar export [--shell bash\|fish\|powershell] [--memory on\|off] [--memory-url URL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--memory off` writes `memory.backend off` |
+| `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, usage links) + `/config.sh` \| `/config.fish` \| `/config.ps1` payloads, regenerated per request — ops (Windows task, auto-restart, logs, re-register): [docs/serve-operations.md](docs/serve-operations.md) |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar rotate <provider> --key-stdin` | Replace one provider's key in place — models, default model, and notes are preserved |
 | `mar config [show\|backend]` | Show or switch the storage backend (file by default; optional Vault) |
@@ -214,15 +242,16 @@ JSON file, byte-for-byte as always. The token is read from a token file or
 inspection). Env-driven setup without a config file:
 `MAR_BACKEND=vault VAULT_ADDR=... VAULT_TOKEN=...`.
 
-## Providers (96)
+## Providers (98)
 
 cursor-grok, codex, claude, cline, opencode, zai, openrouter, antigravity,
 copilot, jev (Typesafe judge — role-only), gemini, commandcode — plus the six
 mesh-lane providers (deepseek, groq, cerebras, mistral, orcarouter,
-cloudflare) and every provider in omp's roster (94 auth policies,
-2026-10-13). Every omp id/env var is confirmed against omp's official
-provider roster; orcarouter, cloudflare (Workers AI), and llama-cpp ship
-verified=False. Catalog: `src/mar/providers.py` · data + verification
+cloudflare), every provider in omp's roster (94 auth policies, 2026-10-13),
+and the two self-hosted llama.cpp endpoints `strata`/`qwen`. Every omp
+id/env var is confirmed against omp's official provider roster; orcarouter
+and cloudflare (Workers AI) ship verified=False. Catalog:
+`src/mar/providers.py` · data + verification
 status: [docs/providers.md](docs/providers.md).
 
 ## Quickstart (dev)
@@ -249,14 +278,16 @@ feature branch → PR → squash merge.
   double-run idempotent.
 
 Full contracts: [docs/architecture.md](docs/architecture.md) ·
+server ops: [docs/serve-operations.md](docs/serve-operations.md) ·
 milestones: [PLAN.md](PLAN.md) ·
 provider data: [docs/providers.md](docs/providers.md) ·
 the original problem statement: [problem_statement.txt](problem_statement.txt).
 
 ## Status
 
-Done: registry, catalog (96 providers: 12 originals + 6 mesh lanes + omp's
-full 94-id roster swept 2026-10-13; 3 unverified), omp adapter,
+Done: registry, catalog (98 providers: 12 originals + 6 mesh lanes + omp's
+full 94-id roster swept 2026-10-13 + strata/qwen LAN endpoints; 2
+unverified), omp adapter,
 limits (OpenRouter credits + Gemini key-check), bootstrap prompt,
 omp-sync, OAuth pull, export pastable with role-setting, global install.
 Planned: per-provider OAuth add-flows (M7), deeper limit fetchers (M8),
