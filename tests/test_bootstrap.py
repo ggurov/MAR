@@ -226,6 +226,35 @@ def test_sync_writes_base_url_env_for_second_local_endpoint(tmp_path: Path) -> N
     assert content == "LM_STUDIO_BASE_URL=http://qwen2.nj02.gurov.us/v1\n"
 
 
+def test_sync_declares_second_local_endpoint_context_for_omp(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    model = "qwen3.8-flash-next-abliterated-iq3_s"
+    reg = _registry(tmp_path, [_sub("qwen", auth_method="none", key=None, model=model)])
+
+    sync(reg, agent_dir=agent_dir)
+
+    document = yaml.safe_load((agent_dir / "models.yml").read_text(encoding="utf-8"))
+    entry = document["providers"]["lm-studio"]
+    assert entry["baseUrl"] == "http://qwen2.nj02.gurov.us/v1"
+    (declared,) = entry["models"]
+    assert declared["id"] == model
+    assert declared["contextWindow"] == 1048576
+
+
+def test_sync_does_not_declare_models_for_the_llama_cpp_route(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    reg = _registry(
+        tmp_path,
+        [_sub("strata", auth_method="none", key=None, model="deepseek-v4.1-flash-1017-xq-v4")],
+    )
+
+    sync(reg, agent_dir=agent_dir)
+
+    # omp's llama.cpp discovery reads meta.n_ctx itself; an explicit entry
+    # would only freeze the model list.
+    assert not (agent_dir / "models.yml").exists()
+
+
 def test_sync_rewrites_existing_base_url_in_place(tmp_path: Path) -> None:
     agent_dir = tmp_path / "agent"
     agent_dir.mkdir()

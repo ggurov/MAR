@@ -89,5 +89,11 @@ rejected by its DNS-rebinding guard):
   route and the model ref is
   `lm-studio/qwen3.8-flash-next-abliterated-iq3_s`. Verified live in an
   isolated agent dir (plain reply) and via `omp models lm-studio`.
-- Keyless and probed by `mar limits qwen`; `omp-sync`/`export` add only the
+- Keyless and probed by `mar limits qwen`; `omp-sync`/`export` add the
   endpoint env line.
+- Context window: omp's built-in `lm-studio` discovery expects LM Studio's
+  native `/api/v0/models` and otherwise falls back to 128k, so MAR also
+  writes `models.yml` with `auth: none`, the endpoint, and the model's
+  verified `contextWindow: 1048576` (`omp_models_api:
+  openai-completions`). Verified live 2026-11-08: `omp models lm-studio`
+  reports `contextWindow: 1048576`, and a plain reply still completes.

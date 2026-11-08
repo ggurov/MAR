@@ -27,6 +27,7 @@ from mar.omp import (
     status_line_extension,
     upsert_credential,
     upsert_env_key,
+    write_model_declarations,
     write_status_line,
     write_status_line_extension,
 )
@@ -664,3 +665,103 @@ def test_read_env_credentials_unreadable_file_raises(tmp_path: Path) -> None:
     env.mkdir()
     with pytest.raises(OmpError):
         read_env_credentials(tmp_path)
+
+
+# --- write_model_declarations ------------------------------------------------
+
+QWEN_MODEL = "qwen3.8-flash-next-abliterated-iq3_s"
+QWEN_URL = "http://qwen2.nj02.gurov.us/v1"
+
+
+def _declaration(**overrides: object) -> dict[str, object]:
+    """Build write_model_declarations kwargs with valid defaults."""
+    kwargs: dict[str, object] = {
+        "agent_dir": Path("/tmp/agent"),
+        "provider_id": "lm-studio",
+        "base_url": QWEN_URL,
+        "model_ids": [QWEN_MODEL],
+        "api": "openai-completions",
+        "context_window": 1048576,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_write_model_declarations_creates_models_yml(tmp_path: Path) -> None:
+    path = write_model_declarations(**_declaration(agent_dir=tmp_path))
+    assert path == tmp_path / "models.yml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    entry = document["providers"]["lm-studio"]
+    assert entry["api"] == "openai-completions"
+    assert entry["auth"] == "none"
+    assert entry["baseUrl"] == QWEN_URL
+    (model,) = entry["models"]
+    assert model["id"] == QWEN_MODEL
+    assert model["name"] == QWEN_MODEL
+    assert model["contextWindow"] == 1048576
+    assert model["input"] == ["text"]
+
+
+def test_write_model_declarations_preserves_other_providers_and_models(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "models.yml").write_text(
+        "providers:\n"
+        "  zai:\n"
+        "    apiKey: ZAI_API_KEY\n"
+        "  lm-studio:\n"
+        "    api: openai-completions\n"
+        "    models:\n"
+        "      - id: keep-me\n"
+        "        contextWindow: 8192\n",
+        encoding="utf-8",
+    )
+    write_model_declarations(**_declaration(agent_dir=tmp_path))
+    document = yaml.safe_load((tmp_path / "models.yml").read_text(encoding="utf-8"))
+    assert document["providers"]["zai"] == {"apiKey": "ZAI_API_KEY"}
+    models = document["providers"]["lm-studio"]["models"]
+    assert [m["id"] for m in models] == ["keep-me", QWEN_MODEL]
+    assert models[0]["contextWindow"] == 8192
+
+
+def test_write_model_declarations_updates_endpoint_and_context_in_place(
+    tmp_path: Path,
+) -> None:
+    write_model_declarations(**_declaration(agent_dir=tmp_path))
+    write_model_declarations(
+        **_declaration(
+            agent_dir=tmp_path,
+            base_url="http://new.example/v1",
+            context_window=2097152,
+        )
+    )
+    document = yaml.safe_load((tmp_path / "models.yml").read_text(encoding="utf-8"))
+    entry = document["providers"]["lm-studio"]
+    assert entry["baseUrl"] == "http://new.example/v1"
+    (model,) = entry["models"]
+    assert model["contextWindow"] == 2097152
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"provider_id": ""},
+        {"base_url": "ftp://localhost/v1"},
+        {"model_ids": []},
+        {"api": ""},
+        {"context_window": 0},
+    ],
+    ids=["empty-provider", "bad-url", "no-models", "empty-api", "zero-context"],
+)
+def test_write_model_declarations_rejects_bad_args(
+    tmp_path: Path, overrides: dict[str, object]
+) -> None:
+    with pytest.raises(OmpError):
+        write_model_declarations(**_declaration(agent_dir=tmp_path, **overrides))
+    assert not (tmp_path / "models.yml").exists()
+
+
+def test_write_model_declarations_rejects_non_mapping_file(tmp_path: Path) -> None:
+    (tmp_path / "models.yml").write_text("- just\n- a list\n", encoding="utf-8")
+    with pytest.raises(OmpError):
+        write_model_declarations(**_declaration(agent_dir=tmp_path))
