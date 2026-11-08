@@ -224,6 +224,21 @@ def test_qwen_is_keyless_on_the_lm_studio_route():
     assert qwen.omp_base_url_env_var == "LM_STUDIO_BASE_URL"
 
 
+def test_self_hosted_entries_record_the_server_context_window():
+    assert [(p.id, p.context_window) for p in CATALOG if p.context_window] == [
+        ("strata", 1048576),
+        ("qwen", 1048576),
+    ]
+
+
+def test_only_qwen_needs_an_explicit_omp_model_declaration():
+    # omp's llama.cpp route reads n_ctx from /v1/models; its lm-studio route
+    # cannot, so qwen's window must be declared in models.yml.
+    assert [(p.id, p.omp_models_api) for p in CATALOG if p.omp_models_api] == [
+        ("qwen", "openai-completions")
+    ]
+
+
 BASE = CATALOG[0]
 
 TAMPER_CASES = [
@@ -281,6 +296,21 @@ TAMPER_CASES = [
         dataclasses.replace(BASE, omp_base_url_env_var="llama_cpp_base_url"),
         "omp_base_url_env_var 'llama_cpp_base_url' does not match",
         id="bad-base-url-env-var-shape",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, context_window=-1),
+        "context_window must be positive",
+        id="negative-context-window",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, context_window=128000),
+        "context_window requires a base_url",
+        id="context-window-without-base-url",
+    ),
+    pytest.param(
+        dataclasses.replace(BASE, omp_models_api="openai-completions"),
+        "omp_models_api requires context_window and a base_url",
+        id="models-api-without-context",
     ),
 ]
 

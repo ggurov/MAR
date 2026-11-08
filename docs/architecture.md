@@ -125,12 +125,13 @@ The extension is rewritten on every sync/export, so it is MAR-owned.
 
 ## Provider catalog
 
-Thirteen entries (see docs/providers.md for the data + verification status).
+Fourteen entries (see docs/providers.md for the data + verification status).
 Fields:
 
 `id, display, auth_methods, key_url, limits_url, signup_url, omp_provider_id,
 omp_env_var, export_env_var, export_oauth_env_var, default_model,
-limits_kind, verified, notes, omp_base_url_env_var, base_url`
+limits_kind, verified, notes, omp_base_url_env_var, base_url,
+context_window, omp_models_api`
 
 - `limits_kind` ∈ {`api`, `manual`} — drives limits.py dispatch.
 - `omp_provider_id` is what MAR writes into `agent.db.provider`. Only ids
@@ -161,6 +162,19 @@ route: provider id `lm-studio` with `LM_STUDIO_BASE_URL`, model ref
 `lm-studio/<model id>`. omp supports one endpoint per built-in local
 provider, so each LAN engine needs its own route; both use the same generic
 `{base_url}/models` limits probe.
+
+**verified** — omp's `llama.cpp` discovery reads `meta.n_ctx` from
+`GET /v1/models`, but its `lm-studio` discovery only understands LM Studio's
+native `/api/v0/models`; a bare llama.cpp server leaves it on the fallback
+128k window (observed live 2026-11-08). Since an explicit
+`providers.<id>` entry in `<agent_dir>/models.yml` replaces built-in
+discovery, MAR declares every model from the subscription there with the
+catalog's verified `context_window` (1048576 for qwen) under
+`omp_models_api` (`openai-completions`), plus `auth: none` and `baseUrl`.
+`bootstrap.sync` merges that entry into an existing `models.yml`
+(other providers untouched); `mar export` emits the whole file for a fresh
+machine. `strata` keeps built-in discovery (`omp_models_api` empty) because
+it already reports the right window.
 
 ## Limits
 

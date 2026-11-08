@@ -317,6 +317,25 @@ class TestExport:
         assert "LLAMA_CPP_BASE_URL=http://deepseek.nj02.gurov.us/v1" in out
         assert "LM_STUDIO_BASE_URL=http://qwen2.nj02.gurov.us/v1" in out
 
+    @pytest.mark.parametrize("shell", ["bash", "powershell"])
+    def test_export_declares_local_model_context(self, reg_path, capsys, shell):
+        run(reg_path, "add", "qwen", "--default", "qwen3.8-flash-next-abliterated-iq3_s")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", shell) == 0
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "models.yml" in out
+        assert "qwen3.8-flash-next-abliterated-iq3_s" in out
+        assert "contextWindow: 1048576" in out
+        assert "baseUrl: http://qwen2.nj02.gurov.us/v1" in out
+        assert "contextWindow" in captured.err
+
+    def test_export_omits_models_yml_without_a_declared_endpoint(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", "zai-key-1234567890")
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        assert "models.yml" not in capsys.readouterr().out
+
     def test_export_redact_keeps_base_url_plain(self, reg_path, capsys):
         run(reg_path, "add", "strata", "--default", "deepseek-v4.1-flash-1017-xq-v4")
         run(reg_path, "add", "zai", "--key", "zai-key-1234567890")

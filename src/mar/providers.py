@@ -71,6 +71,14 @@ class Provider:
         base_url: Endpoint MAR hands to omp for a self-hosted, keyless
             provider (plain ``http://`` on the LAN is expected); empty for
             every hosted provider.
+        context_window: Verified prompt window in tokens for the models this
+            self-hosted endpoint serves; 0 when unknown. Used only when
+            ``omp_models_api`` is set.
+        omp_models_api: When nonempty, omp cannot infer this endpoint's real
+            context window through its built-in discovery, so MAR declares
+            the models in ``models.yml`` under this omp API instead. Empty
+            means built-in discovery is sufficient (``llama.cpp`` reads
+            ``meta.n_ctx``; ``lm-studio`` does not and falls back to 128k).
     """
 
     id: str
@@ -89,6 +97,8 @@ class Provider:
     notes: str
     omp_base_url_env_var: str = ""
     base_url: str = ""
+    context_window: int = 0
+    omp_models_api: str = ""
 
 
 CATALOG: tuple[Provider, ...] = (
@@ -333,6 +343,7 @@ CATALOG: tuple[Provider, ...] = (
             "(2026-10-31) as llama.cpp/<model>."),
         omp_base_url_env_var="LLAMA_CPP_BASE_URL",
         base_url="http://deepseek.nj02.gurov.us/v1",
+        context_window=1048576,
     ),
     Provider(
         id="qwen",
@@ -360,6 +371,8 @@ CATALOG: tuple[Provider, ...] = (
         ),
         omp_base_url_env_var="LM_STUDIO_BASE_URL",
         base_url="http://qwen2.nj02.gurov.us/v1",
+        context_window=1048576,
+        omp_models_api="openai-completions",
     ),
 )
 
@@ -404,8 +417,10 @@ def validate(catalog: Sequence[Provider] = CATALOG) -> list[str]:
     ``^[A-Z][A-Z0-9_]*$``;
     key_url/limits_url/signup_url start with ``https://``; a non-empty
     base_url starts with ``http://``/``https://`` and comes with an omp env
-    route; limits_kind in {"api", "manual"}; verified entries must have a
-    non-empty omp_provider_id and either limits_url or base_url.
+    route; context_window is a positive integer and requires base_url;
+    omp_models_api requires context_window and base_url; limits_kind in
+    {"api", "manual"}; verified entries must have a non-empty
+    omp_provider_id and either limits_url or base_url.
 
     Args:
         catalog: Entries to check; defaults to the shipped CATALOG so the
@@ -453,6 +468,17 @@ def validate(catalog: Sequence[Provider] = CATALOG) -> list[str]:
                     "omp_base_url_env_var (omp needs an env route for the "
                     "endpoint)"
                 )
+        if provider.context_window < 0:
+            problems.append(
+                f"provider '{pid}': context_window must be positive "
+                f"(got {provider.context_window})"
+            )
+        if provider.context_window and not provider.base_url:
+            problems.append(f"provider '{pid}': context_window requires a base_url")
+        if provider.omp_models_api and not (provider.context_window and provider.base_url):
+            problems.append(
+                f"provider '{pid}': omp_models_api requires context_window and a base_url"
+            )
         if provider.omp_base_url_env_var and not _ENV_RE.match(
             provider.omp_base_url_env_var
         ):

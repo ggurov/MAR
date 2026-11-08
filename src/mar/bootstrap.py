@@ -7,9 +7,11 @@ Owns the bridge between MAR's registry and a fresh omp install. Two jobs:
   instruction to run ``mar omp-sync``, optionally followed by the user's
   custom ``~/.mar/prompt.md`` text.
 - ``sync`` pushes one api_key credential per active, verified subscription
-  into omp's ``agent.db`` and applies model roles to ``config.yml``. MAR never
-  writes a guessed omp provider id: entries with an empty omp id or
-  ``verified=False`` are skipped and reported instead.
+  into omp's ``agent.db``, applies model roles to ``config.yml``, and
+  declares self-hosted endpoints' models (with their real context window)
+  in ``models.yml``. MAR never writes a guessed omp provider id: entries
+  with an empty omp id or ``verified=False`` are skipped and reported
+  instead.
 
 A registry provider id that is absent from the catalog is never fatal: the
 prompt labels it ``(unverified provider)`` and sync reports it as skipped.
@@ -141,9 +143,16 @@ def _sync_one(sub: Subscription, agent_dir: Path) -> tuple[str | None, str | Non
         return None, "omp provider id unverified"
     if provider.base_url and provider.omp_base_url_env_var:
         try:
-            omp.upsert_env_key(
-                agent_dir, provider.omp_base_url_env_var, provider.base_url
-            )
+            omp.upsert_env_key(agent_dir, provider.omp_base_url_env_var, provider.base_url)
+            if provider.omp_models_api and provider.context_window and sub.models:
+                omp.write_model_declarations(
+                    agent_dir,
+                    provider.omp_provider_id,
+                    provider.base_url,
+                    list(sub.models),
+                    api=provider.omp_models_api,
+                    context_window=provider.context_window,
+                )
         except omp.OmpError as exc:
             return None, str(exc)
         if sub.auth_method == "none":
@@ -174,11 +183,14 @@ def sync(
     with a ``base_url`` first get their endpoint written to the agent dir's
     ``.env`` under ``omp_base_url_env_var`` (omp's documented route for
     self-hosted engines); keyless ones are done there, keyed ones then store
-    their api_key. Catalog entries with an ``omp_env_var`` are written to the
-    agent dir's ``.env`` (environment fallback), all others as login-style
-    rows in omp's ``agent.db``. An ``OmpError`` from one provider is reported
-    as a skip for that provider only; the remaining providers are still
-    written.
+    their api_key. A self-hosted entry with ``omp_models_api`` and a
+    verified ``context_window`` also gets its models declared in
+    ``models.yml``, because omp's built-in lm-studio discovery cannot read a
+    llama.cpp server's real window. Catalog entries with an ``omp_env_var``
+    are written to the agent dir's ``.env`` (environment fallback), all
+    others as login-style rows in omp's ``agent.db``. An ``OmpError`` from
+    one provider is reported as a skip for that provider only; the remaining
+    providers are still written.
     Afterwards, each ``roles`` entry is applied via ``set_model_role``, the
     fixed :func:`omp.standard_status_line` segments replace any cloned ones,
     and the ``provider/api-id`` status-line extension is installed (errors

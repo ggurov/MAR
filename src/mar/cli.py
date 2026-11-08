@@ -14,6 +14,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml
+
 from mar import __version__, bootstrap, limits, omp, providers, registry, store, vault
 
 PROVIDER_IDS = providers.ids()
@@ -440,6 +442,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     skipped: list[str] = []
     oauth_used = False
     oauth_expiries: list[tuple[str, int]] = []
+    declared: dict[str, dict[str, object]] = {}
     for sub in reg.active():
         try:
             provider = providers.get(sub.provider)
@@ -449,6 +452,19 @@ def _cmd_export(args: argparse.Namespace) -> int:
         if provider.base_url and provider.omp_base_url_env_var:
             pairs.append((provider.omp_base_url_env_var, provider.base_url))
             url_vars.add(provider.omp_base_url_env_var)
+            if provider.omp_models_api and provider.context_window and sub.models:
+                entry = omp.declared_provider_entry(
+                    provider.omp_provider_id,
+                    provider.base_url,
+                    list(sub.models),
+                    api=provider.omp_models_api,
+                    context_window=provider.context_window,
+                )
+                merged = declared.get(provider.omp_provider_id)
+                if merged is None:
+                    declared[provider.omp_provider_id] = entry
+                else:
+                    merged["models"].extend(entry["models"])
         if sub.auth_method == "none":
             if not provider.base_url:
                 skipped.append(
@@ -568,6 +584,18 @@ def _cmd_export(args: argparse.Namespace) -> int:
             "role-set for "
             + ", ".join(roles)
             + " (config.yml; skipped there if modelRoles already exists)"
+        )
+
+    models_yaml = ""
+    if declared:
+        models_yaml = yaml.safe_dump({"providers": declared}, sort_keys=False, allow_unicode=True)
+        windows = sorted({int(entry["models"][0]["contextWindow"]) for entry in declared.values()})
+        notes.append(
+            "models.yml declares "
+            + ", ".join(sorted(declared))
+            + f" with contextWindow {windows[0]} (MAR-owned: export replaces the "
+            "file, omp-sync merges); omp's built-in lm-studio discovery would "
+            "fall back to 128k"
         )
 
     # Edit policy: hashline everywhere; deepseek explicitly pinned (other
@@ -704,6 +732,15 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 '\'@ | Set-Content "$env:USERPROFILE\\.omp\\agent\\extensions\\mar-statusline.js" -Encoding ascii',
             ]
         )
+        if models_yaml:
+            body = "\n".join(
+                [
+                    body,
+                    "@'",
+                    *models_yaml.rstrip("\n").splitlines(),
+                    '\'@ | Set-Content "$env:USERPROFILE\\.omp\\agent\\models.yml" -Encoding ascii',
+                ]
+            )
         if role_lines:
             body = "\n".join(
                 [
@@ -731,6 +768,15 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 "MAR_STATUSLINE_EOF",
             ]
         )
+        if models_yaml:
+            body = "\n".join(
+                [
+                    body,
+                    "cat > ~/.omp/agent/models.yml <<'MAR_MODELS_EOF'",
+                    *models_yaml.rstrip("\n").splitlines(),
+                    "MAR_MODELS_EOF",
+                ]
+            )
         if role_lines:
             roles_text = "\\n".join(["modelRoles:", *role_lines])
             body = "\n".join(

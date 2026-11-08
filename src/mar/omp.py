@@ -1,13 +1,16 @@
 """omp adapter: write provider credentials and display settings into an omp install.
 
 MAR pushes the user's subscription keys into an Oh My Pi (omp) install so omp
-itself authenticates against providers. Three artifacts are touched:
+itself authenticates against providers. Four artifacts are touched:
 
 - ``<agent_dir>/agent.db`` — SQLite store, table ``auth_credentials`` (DDL
   verified against a live omp install; kept verbatim in
   ``_AUTH_CREDENTIALS_DDL`` and mirrored in docs/architecture.md).
 - ``<agent_dir>/config.yml`` — omp config; MAR edits ``modelRoles`` and the
   ``statusLine`` segment list, leaving every other top-level key alone.
+- ``<agent_dir>/models.yml`` — model declarations for self-hosted endpoints
+  whose built-in omp discovery cannot read the real context window; other
+  providers and keys in the file are preserved.
 - ``<agent_dir>/extensions/mar-statusline.js`` — a tiny omp extension that
   prints its glyph (the compact thinking symbol when the model exposes
   levels; else the model icon) and ``provider/api-id`` on its own line above
@@ -31,6 +34,7 @@ import yaml
 __all__ = [
     "OauthCredential",
     "OmpError",
+    "declared_provider_entry",
     "default_agent_dir",
     "list_credentials",
     "read_env_credentials",
@@ -41,9 +45,11 @@ __all__ = [
     "status_line_extension",
     "upsert_credential",
     "upsert_env_key",
+    "write_model_declarations",
     "write_status_line",
     "write_status_line_extension",
 ]
+
 
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -346,6 +352,161 @@ def upsert_env_key(agent_dir: Path, var: str, key: str) -> None:
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     except OSError as exc:
         raise OmpError(f"failed to write {env_path}: {exc}") from exc
+
+
+
+def declared_provider_entry(
+    provider_id: str,
+    base_url: str,
+    model_ids: list[str],
+    *,
+    api: str,
+    context_window: int,
+) -> dict[str, object]:
+    """Build one omp ``models.yml`` provider entry for a self-hosted endpoint.
+
+    omp's ``lm-studio`` route has no native metadata endpoint that a bare
+    llama.cpp server can answer, so discovery falls back to a 128k context
+    window. Declaring the served models here gives omp the verified window.
+    The entry is keyless (``auth: none``) and carries the endpoint literally,
+    matching the ``LM_STUDIO_BASE_URL`` env route MAR already writes.
+
+    Args:
+        provider_id: omp provider id, e.g. ``"lm-studio"``.
+        base_url: Endpoint URL, ``http://`` or ``https://``.
+        model_ids: Model ids served by the endpoint; duplicates are dropped.
+        api: omp API name for the route, e.g. ``"openai-completions"``.
+        context_window: Verified prompt window in tokens, positive.
+
+    Returns:
+        A mapping with ``api``, ``auth``, ``baseUrl``, and ``models`` keys,
+        where every model entry has ``id``, ``name``, text input, zero cost,
+        and ``contextWindow``.
+
+    Raises:
+        OmpError: If any argument is empty/malformed or no model id remains.
+    """
+    if not provider_id or not provider_id.strip():
+        raise OmpError("provider_id must be a non-empty string")
+    if not base_url.startswith(("http://", "https://")):
+        raise OmpError(f"base_url must start with http:// or https://: {base_url!r}")
+    if not api or not api.strip():
+        raise OmpError("api must be a non-empty string")
+    if context_window <= 0:
+        raise OmpError(f"context_window must be positive: {context_window!r}")
+    unique_ids: list[str] = []
+    for model_id in model_ids:
+        if model_id and model_id not in unique_ids:
+            unique_ids.append(model_id)
+    if not unique_ids:
+        raise OmpError("model_ids must contain at least one non-empty id")
+    return {
+        "api": api,
+        "auth": "none",
+        "baseUrl": base_url,
+        "models": [
+            {
+                "id": model_id,
+                "name": model_id,
+                "input": ["text"],
+                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                "contextWindow": context_window,
+            }
+            for model_id in unique_ids
+        ],
+    }
+
+
+def write_model_declarations(
+    agent_dir: Path,
+    provider_id: str,
+    base_url: str,
+    model_ids: list[str],
+    *,
+    api: str,
+    context_window: int,
+) -> Path:
+    """Merge one declared endpoint into ``<agent_dir>/models.yml``.
+
+    Other providers and unrelated keys are preserved. Within this provider,
+    ``api``, ``auth``, and ``baseUrl`` are replaced with the given values;
+    models with matching ids get the given window, other models stay as they
+    are. An explicit ``providers.<id>`` entry replaces omp's built-in
+    discovery for that provider, so the declared list must name every model
+    MAR expects to use on the endpoint.
+
+    Args:
+        agent_dir: omp agent directory holding (or receiving) ``models.yml``.
+        provider_id: omp provider id, e.g. ``"lm-studio"``.
+        base_url: Endpoint URL written as ``baseUrl``.
+        model_ids: Model ids to declare; duplicates are dropped.
+        api: omp API name for the route, e.g. ``"openai-completions"``.
+        context_window: Verified prompt window in tokens, positive.
+
+    Returns:
+        The written ``models.yml`` path.
+
+    Raises:
+        OmpError: If an argument is invalid, the existing file is not a YAML
+            mapping with a mapping ``providers`` section, or the write fails.
+    """
+    incoming = declared_provider_entry(
+        provider_id,
+        base_url,
+        model_ids,
+        api=api,
+        context_window=context_window,
+    )
+    agent_dir = Path(agent_dir)
+    models_path = agent_dir / "models.yml"
+    document: dict[str, object] = {}
+    if models_path.exists():
+        try:
+            loaded = yaml.safe_load(models_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise OmpError(f"failed to read {models_path}: {exc}") from exc
+        except yaml.YAMLError as exc:
+            raise OmpError(f"{models_path} is not valid YAML: {exc}") from exc
+        if loaded is not None:
+            if not isinstance(loaded, dict):
+                raise OmpError(f"{models_path} does not contain a YAML mapping")
+            document = loaded
+    providers_map = document.setdefault("providers", {})
+    if not isinstance(providers_map, dict):
+        raise OmpError(f"{models_path} has a non-mapping providers entry")
+    existing = providers_map.get(provider_id, {})
+    if not isinstance(existing, dict):
+        raise OmpError(f"{models_path} has a non-mapping providers.{provider_id} entry")
+    existing["api"] = incoming["api"]
+    existing["auth"] = incoming["auth"]
+    existing["baseUrl"] = incoming["baseUrl"]
+    models = existing.get("models", [])
+    if not isinstance(models, list):
+        raise OmpError(f"{models_path} has a non-list providers.{provider_id}.models entry")
+    by_id: dict[str, dict[str, object]] = {}
+    for model in models:
+        if not isinstance(model, dict) or not isinstance(model.get("id"), str):
+            raise OmpError(
+                f"{models_path} has a model without a string id under providers.{provider_id}"
+            )
+        by_id[model["id"]] = model
+    for declared in incoming["models"]:
+        model_id = declared["id"]
+        if model_id in by_id:
+            by_id[model_id]["contextWindow"] = declared["contextWindow"]
+        else:
+            models.append(declared)
+    existing["models"] = models
+    providers_map[provider_id] = existing
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        models_path.write_text(
+            yaml.safe_dump(document, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        raise OmpError(f"failed to write {models_path}: {exc}") from exc
+    return models_path
 
 
 @dataclass(frozen=True)
