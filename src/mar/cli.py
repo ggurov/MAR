@@ -400,6 +400,12 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _meter_bar(fraction: float, width: int = 20) -> str:
+    """Render an ASCII usage bar filled to ``fraction`` (0..1)."""
+    filled = round(min(max(fraction, 0.0), 1.0) * width)
+    return "\u2588" * filled + "\u2591" * (width - filled)
+
+
 def _cmd_limits(args: argparse.Namespace) -> int:
     reg = _load(args)
     targets = [args.provider] if args.provider else [s.provider for s in reg.active()]
@@ -431,15 +437,31 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             if snap.note:
                 print(f"  {snap.note}")
             for item in snap.items:
-                if item.used is None and item.limit is not None:
+                unit = (item.unit or "").lower()
+                suffix = "cr" if unit.startswith("cre") else item.unit
+                if item.used is not None and item.limit:
+                    fraction = item.used / item.limit
+                    if unit in ("usd", "$"):
+                        detail = (
+                            f"${item.limit - item.used:.2f} left "
+                            f"({item.used:g} / {item.limit:g} {item.unit} used)"
+                        )
+                    else:
+                        detail = f"{item.used:g} / {item.limit:g} {suffix} used"
                     print(
-                        f"  {item.name}: {item.limit:g} {item.unit} remaining "
-                        f"({item.window})"
+                        f"  {item.name:<10} {_meter_bar(fraction)} "
+                        f"{fraction * 100:3.0f}%  {detail}"
                     )
-                    continue
-                used = "?" if item.used is None else item.used
-                cap = "?" if item.limit is None else item.limit
-                print(f"  {item.name}: {used} / {cap} {item.unit} ({item.window})")
+                elif item.limit is not None:
+                    if unit in ("usd", "$"):
+                        detail = f"${item.limit:.2f} left"
+                    else:
+                        detail = f"{item.limit:g} {suffix} left"
+                    print(f"  {item.name:<10} {detail} ({item.window})")
+                else:
+                    used = "?" if item.used is None else item.used
+                    cap = "?" if item.limit is None else item.limit
+                    print(f"  {item.name}: {used} / {cap} {item.unit} ({item.window})")
         else:
             try:
                 print(limits.manual_hint(pid))

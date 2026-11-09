@@ -87,7 +87,9 @@ in a URL, body, or error message (test-enforced).
 `GET https://api.commandcode.ai/alpha/billing/credits` with the key's bearer
 token (a MAR user-agent is required; the default Python-urllib UA gets 403),
 returning the key's own monthly balance plus 5h/weekly used/cap and reset
-epochs — so alternate keys on one provider show different numbers.
+epochs — so alternate keys on one provider show different numbers. Both the
+web page and `mar limits` render bounded values as progress bars (percent used
+plus a filled bar); exact fractions stay in the hover title / detail text.
 
 ## omp integration contract
 

@@ -169,22 +169,172 @@ def _format_snapshot_items(items: tuple) -> str:
     return " \u00b7 ".join(parts)
 
 
-def _fetch_usage_cell(provider: str, key: str | None) -> str:
-    """Fetch one provider's live quota cell.
+def _meter(
+    label: str,
+    *,
+    fraction: float | None = None,
+    detail: str = "",
+    reset_at_ms: int | None = None,
+) -> dict:
+    """Build one display meter (a progress bar plus its human text).
+
+    Args:
+        label: Window/limit name, e.g. ``"5-hour"``.
+        fraction: Used fraction (0..1); None means no bounded bar.
+        detail: Human numbers under the bar, e.g. ``"0.48 / 14 cr"``.
+        reset_at_ms: Epoch milliseconds of the window reset, or 0/None.
+
+    Returns:
+        A dict with ``label``, ``percent`` (None when unbounded),
+        ``level`` (``ok``/``warn``/``crit``), ``detail`` and ``reset``.
+    """
+    percent: int | None = None
+    level = "ok"
+    if fraction is not None:
+        fraction = min(max(float(fraction), 0.0), 1.0)
+        percent = round(fraction * 100)
+        level = "ok" if percent < 60 else ("warn" if percent < 85 else "crit")
+    reset = ""
+    if reset_at_ms:
+        hours = (reset_at_ms / 1000 - time.time()) / 3600
+        reset = f"resets in {_format_duration(hours)}"
+    return {
+        "label": label,
+        "percent": percent,
+        "level": level,
+        "detail": detail,
+        "reset": reset,
+    }
+
+
+def _meters_from_omp(items: list[dict]) -> tuple[dict, ...]:
+    """Turn ``omp usage`` window limits into display meters.
+
+    Uses ``usedFraction`` / absolute ``used`` + ``limit`` when present,
+    percent-remaining windows are inverted (used = 100 - remaining), and
+    a bare balance renders as text without a bar.
+
+    Args:
+        items: The ``limits`` list of one ``omp usage`` report.
+
+    Returns:
+        One meter per informative window, in report order.
+    """
+    meters: list[dict] = []
+    base_labels = [
+        (item.get("window") or {}).get("label")
+        or item.get("label")
+        or item.get("id", "?").rsplit(":", 1)[-1]
+        for item in items
+    ]
+    counts: dict[str, int] = {}
+    for base in base_labels:
+        counts[base] = counts.get(base, 0) + 1
+    for item, base in zip(items, base_labels, strict=True):
+        amount = item.get("amount") or {}
+        window = item.get("window") or {}
+        label = (
+            base
+            if counts[base] == 1
+            else f"{base} · {item.get('id', '?').rsplit(':', 1)[-1]}"
+        )
+        unit = amount.get("unit") or ""
+        suffix = "cr" if unit.lower().startswith("cre") else unit
+        used = amount.get("used")
+        cap = amount.get("limit")
+        remaining = amount.get("remaining")
+        fraction = amount.get("usedFraction")
+        detail = ""
+        if unit == "percent" and remaining is not None:
+            fraction = max(0.0, 1 - float(remaining) / 100)
+            detail = f"{float(remaining):g}% left"
+        elif cap is not None and used is not None:
+            fraction = float(used) / float(cap) if cap else None
+            detail = f"{float(used):g} / {float(cap):g} {suffix}".rstrip()
+        elif cap is not None and remaining is not None:
+            fraction = (float(cap) - float(remaining)) / float(cap) if cap else None
+            detail = f"{float(remaining):g} / {float(cap):g} {suffix} left".rstrip()
+        elif fraction is not None:
+            fraction = float(fraction)
+            detail = f"{fraction * 100:.0f}% used"
+        elif cap is not None:
+            detail = f"{float(cap):g} {suffix} limit".rstrip()
+        elif remaining is not None:
+            detail = f"{float(remaining):g} {suffix} left".rstrip()
+        meter = _meter(label, fraction=fraction, detail=detail, reset_at_ms=window.get("resetsAt"))
+        if meter["percent"] is not None or meter["detail"] or meter["reset"]:
+            meters.append(meter)
+    return tuple(meters)
+
+
+def _meters_from_snapshot(items: tuple) -> tuple[dict, ...]:
+    """Turn one live ``LimitSnapshot``'s items into display meters.
+
+    Args:
+        items: ``LimitSnapshot.items`` from ``limits.fetch``.
+
+    Returns:
+        One meter per informative item, in snapshot order. USD items keep
+        a dollar detail (``"$315.00 left"``); numeric windows show
+        ``"used / limit cr"``.
+    """
+    meters: list[dict] = []
+    for item in items:
+        unit = (item.unit or "").lower()
+        if unit in ("usd", "$"):
+            if item.used is not None and item.limit is not None:
+                detail = f"${item.limit - item.used:.2f} left"
+            elif item.limit is not None:
+                detail = f"${item.limit:.2f} left"
+            elif item.used is not None:
+                detail = f"${item.used:.2f} used"
+            else:
+                continue
+            fraction = (
+                item.used / item.limit
+                if item.used is not None and item.limit
+                else None
+            )
+        else:
+            suffix = "cr" if unit.startswith("cre") else item.unit
+            if item.used is not None and item.limit is not None:
+                fraction = item.used / item.limit if item.limit else None
+                detail = f"{item.used:g} / {item.limit:g} {suffix}".rstrip()
+            elif item.limit is not None:
+                fraction = None
+                detail = f"{item.limit:g} {suffix} left".rstrip()
+            elif item.used is not None:
+                fraction = None
+                detail = f"{item.used:g} {suffix} used".rstrip()
+            else:
+                continue
+        meter = _meter(
+            item.name,
+            fraction=fraction,
+            detail=detail,
+            reset_at_ms=item.reset_at_ms,
+        )
+        if meter["percent"] is not None or meter["detail"] or meter["reset"]:
+            meters.append(meter)
+    return tuple(meters)
+
+
+def _fetch_usage(provider: str, key: str | None) -> tuple[str, tuple[dict, ...]]:
+    """Fetch one provider's live quota text plus display meters.
 
     Raises:
         Exception: Any fetch/parse failure (callers decide the fallback).
     """
     snapshot = limits.fetch(provider, key or "", timeout=5.0)
-    if snapshot.items:
-        return _format_snapshot_items(snapshot.items) or (snapshot.note or "ok")
-    return snapshot.note or "ok"
+    text = _format_snapshot_items(snapshot.items) or (snapshot.note or "ok")
+    meters = _meters_from_snapshot(snapshot.items) if snapshot.items else ()
+    return text, meters
 
 
 def _refresh_usage_async(
     provider: str, key: str | None, account: str = PRIMARY_ACCOUNT
 ) -> threading.Thread | None:
-    """Refresh one provider key's quota cell in the background, single-flight.
+    """Refresh one provider key's quota in the background, single-flight.
 
     Returns:
         The started thread, or ``None`` when a refresh is already running.
@@ -198,11 +348,12 @@ def _refresh_usage_async(
 
     def worker() -> None:
         try:
-            cell = _fetch_usage_cell(provider, key)
+            text, meters = _fetch_usage(provider, key)
         except Exception:  # noqa: BLE001 — keep the last good cell
-            cell = previous[1] if previous is not None else "unavailable"
+            text = previous[1] if previous is not None else "unavailable"
+            meters = previous[2] if previous is not None and len(previous) > 2 else ()
         finally:
-            cache[cache_key] = (time.monotonic(), cell)
+            cache[cache_key] = (time.monotonic(), text, meters)
             lock.release()
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -210,60 +361,60 @@ def _refresh_usage_async(
     return thread
 
 
-def _usage_cell(
+def _usage_entry(
     provider: str, key: str | None, account: str = PRIMARY_ACCOUNT
-) -> str | None:
-    """Return the live quota text for one provider, cached and non-blocking.
+) -> tuple[str | None, tuple[dict, ...]]:
+    """Return ``(quota text, meters)`` for one provider key, cached.
 
-    Every ``limits_kind == "api"`` catalog entry is fetched: OpenRouter
-    reports credits (rendered as dollars), Gemini reports key liveness, and
-    the self-hosted ``strata`` engine reports its loaded model — for
-    fetchers without numeric items the snapshot's own ``note`` is the cell.
-
-    A fresh cache entry is returned directly. A stale entry is returned
-    immediately while a single background refresh runs, so rendering the
-    page never waits on a provider API. Only the first call for a provider
-    fetches synchronously; if another refresh already holds the provider
-    lock, ``None`` is returned so the page still renders fast.
+    The cache holds ``(monotonic, text, meters)`` per provider/account.
+    Fresh entries return directly; stale entries return immediately while a
+    single background refresh runs; a cold fetch blocks only when no other
+    refresh already holds the lock (then ``(None, ())`` is returned).
 
     Args:
         provider: Catalog id.
-        key: The provider credential used for the live fetch (unused by
-            keyless endpoints).
-        account: Account label whose quota is shown; alternates are cached
-            separately from the primary key.
+        key: Provider credential used for the live fetch.
+        account: Account label whose quota is shown.
 
     Returns:
-        Human quota text, e.g. ``"$315.00 left"``; ``None`` when the
-        provider has no live fetcher or a refresh is already in flight.
-        Fetch failures degrade to ``"unavailable"`` (or keep the last
-        good cell when refreshing in the background).
+        ``(text, meters)``; ``(None, ())`` when the provider has no live
+        fetcher or a refresh is already in flight. Failures degrade to
+        ``"unavailable"`` (or keep the last good value when refreshing).
     """
     try:
         entry = providers.get(provider)
     except KeyError:
-        return None
+        return None, ()
     if entry.limits_kind != "api":
-        return None
+        return None, ()
     cache_key = _usage_cache_key(provider, account)
     now = time.monotonic()
     cached = _usage_cache.get(cache_key)
     if cached is not None and now - cached[0] < _USAGE_TTL_SECONDS:
-        return cached[1]
+        meters = cached[2] if len(cached) > 2 else ()
+        return cached[1], meters
     if cached is not None:
         _refresh_usage_async(provider, key, account)
-        return cached[1]
+        meters = cached[2] if len(cached) > 2 else ()
+        return cached[1], meters
     lock = _provider_usage_lock(cache_key)
     if not lock.acquire(blocking=False):
-        return None
+        return None, ()
     try:
-        cell = _fetch_usage_cell(provider, key)
+        text, meters = _fetch_usage(provider, key)
     except Exception:  # noqa: BLE001 — a dead usage API must never 500 the page
-        cell = "unavailable"
+        text, meters = "unavailable", ()
     finally:
-        _usage_cache[cache_key] = (time.monotonic(), cell)
+        _usage_cache[cache_key] = (time.monotonic(), text, meters)
         lock.release()
-    return cell
+    return text, meters
+
+
+def _usage_cell(
+    provider: str, key: str | None, account: str = PRIMARY_ACCOUNT
+) -> str | None:
+    """Return the live quota text for one provider, cached and non-blocking."""
+    return _usage_entry(provider, key, account)[0]
 
 
 _OMP_TTL_SECONDS = 300.0
@@ -458,7 +609,7 @@ def _format_renew(hours: float) -> str:
         return f"in ~{days} day" if days == 1 else f"in ~{days} days"
     return ""
 
-def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
+def services_snapshot(registry: Path) -> list[dict]:
     """Collect one row per active subscription account for the services panel.
 
     Args:
@@ -499,17 +650,22 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         keys = [(PRIMARY_ACCOUNT, sub.key)]
         keys.extend((account.name, account.key) for account in sub.accounts)
         shared_quota = None if sub.accounts else omp_quota
+        shared_meters = (
+            _meters_from_omp(omp_limits) if shared_quota is not None else ()
+        )
         for label, key in keys:
             selected = label == selected_label
             quota = shared_quota
+            meters = shared_meters
             if quota is None:
-                quota = _usage_cell(sub.provider, key, account=label)
+                quota, meters = _usage_entry(sub.provider, key, account=label)
             rows.append(
                 {
                     "provider": sub.provider,
                     "account": label,
                     "selected": selected,
                     "auth": sub.auth_method,
+                    "meters": meters,
                     "usage": quota,
                     "renew": renew,
                     "limits_url": limits_url,
@@ -517,6 +673,47 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
                 }
             )
     return rows
+
+
+def _render_meters(meters: tuple[dict, ...], usage: str | None) -> str:
+    """Render quota meters as progress bars, falling back to plain text.
+
+    Args:
+        meters: Meter dicts from :func:`_meters_from_omp` /
+            :func:`_meters_from_snapshot`.
+        usage: Legacy text cell, used when no meter exists (e.g. a
+            key-liveness note).
+
+    Returns:
+        HTML for one table cell.
+    """
+    if not meters:
+        return html_mod.escape(usage) if usage else ""
+    cards: list[str] = []
+    for meter in meters:
+        label = html_mod.escape(meter["label"])
+        detail = html_mod.escape(meter["detail"])
+        reset = html_mod.escape(meter["reset"])
+        note = " \u00b7 ".join(part for part in (detail, reset) if part)
+        title = f' title="{html_mod.escape(note)}"' if note else ""
+        if meter["percent"] is None:
+            cards.append(
+                f'<div class="meter"{title}><div class="mhead"><span>{label}</span>'
+                f"<b>{detail}</b></div>"
+                + (f'<div class="mnote">{reset}</div>' if reset else "")
+                + "</div>"
+            )
+            continue
+        percent = meter["percent"]
+        cards.append(
+            f'<div class="meter"{title}><div class="mhead"><span>{label}</span>'
+            f"<b>{percent}% used</b></div>"
+            f'<div class="bar"><span class="fill {meter["level"]}" '
+            f'style="width:{percent}%"></span></div>'
+            + (f'<div class="mnote">{reset}</div>' if reset else "")
+            + "</div>"
+        )
+    return '<div class="meters">' + "".join(cards) + "</div>"
 
 
 def render_index_html(host: str, registry: Path) -> str:
@@ -555,7 +752,7 @@ def render_index_html(host: str, registry: Path) -> str:
         f"irm http://{host}/config.ps1?memory=on{accounts_query} | iex"
     )
     for row in snapshot:
-        usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
+        usage = _render_meters(row.get("meters") or (), row["usage"])
         name = html_mod.escape(row["provider"])
         link = row["limits_url"] or row["endpoint"]
         if link:
@@ -584,7 +781,7 @@ def render_index_html(host: str, registry: Path) -> str:
         rows_html.append(
             f"<tr><td>{provider}</td>"
             f"<td>{row['auth']}</td>"
-            f"<td class=\"mono\">{usage}</td>"
+            f'<td class="usage-cell">{usage}</td>'
             f"<td>{renew}</td>"
             f"<td class=\"keys\">{key_cell}</td></tr>"
         )
@@ -624,12 +821,24 @@ def render_index_html(host: str, registry: Path) -> str:
   a {{ color:#58a6ff; text-decoration:none; }}
   a:hover {{ text-decoration:underline; }}
   table {{ width:100%; border-collapse:collapse; font-size:13.5px; }}
-  th, td {{ text-align:left; padding:6px 8px; border-bottom:1px solid #21262d; }}
+  th, td {{ text-align:left; padding:6px 8px; border-bottom:1px solid #21262d;
+            vertical-align:top; }}
   th {{ color:#8b949e; font-weight:600; font-size:12px; text-transform:uppercase;
         letter-spacing:.05em; }}
   td.mono {{ font-family:ui-monospace,Consolas,monospace; }}
   td.keys {{ white-space:nowrap; }}
   label.acct {{ display:flex; gap:6px; align-items:center; cursor:pointer; }}
+  td.usage-cell {{ width:42%; min-width:220px; }}
+  .meters {{ display:flex; flex-direction:column; gap:10px; max-width:360px; }}
+  .meter .mhead {{ display:flex; justify-content:space-between; gap:12px;
+                   font-size:12.5px; margin-bottom:4px; }}
+  .mhead b {{ font-variant-numeric:tabular-nums; }}
+  .bar {{ height:9px; background:#21262d; border:1px solid #30363d;
+          border-radius:5px; overflow:hidden; box-sizing:border-box; }}
+  .bar .fill {{ display:block; height:100%; background:#3fb950; border-radius:4px; }}
+  .fill.warn {{ background:#d29922; }}
+  .fill.crit {{ background:#f85149; }}
+  .mnote {{ color:#8b949e; font-size:11.5px; margin-top:3px; }}
   ul {{ margin:6px 0 0; padding-left:18px; color:#8b949e; font-size:13px; }}
   footer {{ margin-top:20px; font-size:13px; color:#8b949e; }}
 </style>
@@ -675,7 +884,8 @@ def render_index_html(host: str, registry: Path) -> str:
       <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th><th>Key</th></tr>
       {''.join(rows_html)}
     </table>
-    <p class="note"><span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
+    <p class="note">Quota bars fill as usage is consumed; hover a bar for exact numbers.
+       <span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
        LAN only; the firewall rule scopes this port to LocalSubnet.</p>
     <p class="note">Key radios switch which account <code>mar export</code>,
        <code>/config.sh</code>, <code>/config.ps1</code>, and <code>mar omp-sync</code>

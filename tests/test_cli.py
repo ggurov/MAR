@@ -138,7 +138,9 @@ class TestLimits:
         out = capsys.readouterr().out
         assert seen["url"] == "https://openrouter.ai/api/v1/credits"
         assert seen["header"]["Authorization"] == "Bearer sk-or-fake-123456"
-        assert "5.25 / 25.0 USD" in out
+        assert "5.25 / 25 USD" in out
+        assert "█" in out and "░" in out  # progress bar
+        assert "21%" in out
 
     def test_limits_no_active_subscriptions(self, reg_path):
         assert run(reg_path, "limits") == 1
@@ -1160,3 +1162,29 @@ class TestExportAccountOverride:
     def test_export_account_unknown_label_is_runtime_error(self, reg_path):
         run(reg_path, "add", "commandcode", "--key", "user_primary-key-1234567890")
         assert run(reg_path, "export", "--account", "commandcode=ghost") == 1
+
+
+class TestLimitsBars:
+    def test_api_items_render_progress_bars(self, reg_path, monkeypatch, capsys):
+        run(reg_path, "add", "commandcode", "--key", "cc-key-1234567890")
+        capsys.readouterr()
+
+        def fake_fetch(provider_id, key, **kwargs):
+            from mar.limits import LimitItem, LimitSnapshot
+
+            return LimitSnapshot(
+                provider=provider_id,
+                fetched_at="2026-11-08T00:00:00+00:00",
+                items=(
+                    LimitItem("5-hour", 7.0, 14.0, "credits", "5-hour"),
+                    LimitItem("Balance", None, 6.4, "USD", "monthly"),
+                ),
+                source="api",
+            )
+
+        monkeypatch.setattr(cli.limits, "fetch", fake_fetch)
+        assert run(reg_path, "limits", "commandcode") == 0
+        out = capsys.readouterr().out
+        assert "50%" in out and "7 / 14 cr used" in out
+        assert "█" in out and "░" in out
+        assert "$6.40 left (monthly)" in out

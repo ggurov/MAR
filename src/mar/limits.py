@@ -386,7 +386,7 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
     items: list[LimitItem] = []
     windows = payload.get("windowLimits")
     if isinstance(windows, dict):
-        for field, label in (("fiveHour", "5h"), ("weekly", "7d")):
+        for field, label in (("fiveHour", "5-hour"), ("weekly", "Weekly")):
             entry = windows.get(field)
             if not isinstance(entry, dict):
                 continue
@@ -415,7 +415,7 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
     if balance is not None:
         items.append(
             LimitItem(
-                name="balance",
+                name="Balance",
                 used=None,
                 limit=balance,
                 unit="USD",
