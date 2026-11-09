@@ -70,6 +70,7 @@ def render_config(
     backend: str | None = None,
     memory: str = "on",
     accounts: str = "",
+    tokenpool: str = "",
 ) -> str:
     """Render the ``mar export`` payload for one shell, minus the markers.
 
@@ -82,6 +83,9 @@ def render_config(
             ``"off"`` writes ``memory.backend off`` so the box stops using memory.
         accounts: Optional ``PROVIDER=LABEL`` overrides (comma-separated)
             that pin the served key for this payload only.
+        tokenpool: Optional tokenpool base URL; when set, the payload declares
+            the tokenpool omp provider (models read from tokenpool's
+            ``/v1/models``). Token from ``$MAR_TOKENPOOL_TOKEN``.
 
     Returns:
         The payload body exactly as ``mar export`` prints between the
@@ -101,6 +105,8 @@ def render_config(
     argv += ["--memory", memory]
     for provider, label in _account_pairs(accounts):
         argv += ["--account", f"{provider}={label}"]
+    if tokenpool:
+        argv += ["--tokenpool", tokenpool]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         cli.main(argv)
     lines = [
@@ -716,6 +722,24 @@ def _render_meters(meters: tuple[dict, ...], usage: str | None) -> str:
     return '<div class="meters">' + "".join(cards) + "</div>"
 
 
+TOKENPOOL_PORT = 8940
+
+
+def tokenpool_base_url(host: str) -> str:
+    """Resolve the tokenpool base URL for this page.
+
+    ``$MAR_TOKENPOOL_URL`` wins; otherwise the page's host with tokenpool's
+    default port. The control panel is at ``<base>/admin``.
+    """
+    configured = os.environ.get("MAR_TOKENPOOL_URL", "").strip()
+    if configured:
+        return configured.rstrip("/")
+    hostname = urllib.parse.urlsplit(f"//{host}").hostname or "localhost"
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    return f"http://{hostname}:{TOKENPOOL_PORT}"
+
+
 def render_index_html(host: str, registry: Path) -> str:
     """Render the landing page for one reachable ``host:port``.
 
@@ -730,6 +754,7 @@ def render_index_html(host: str, registry: Path) -> str:
         GitHub repo link.
     """
     memory_url = os.environ.get("MAR_MEMORY_URL") or cli.DEFAULT_GLOBAL_MEMORY_URL
+    routing = tokenpool_base_url(host)
     dashboard_link = (
         f'<a href="{HINDSIGHT_DASHBOARD_URL}" target="_blank"'
         ' rel="noopener">Open Hindsight dashboard</a>'
@@ -882,6 +907,14 @@ def render_index_html(host: str, registry: Path) -> str:
   </div>
 
   <div class="card">
+    <h2>Routing</h2>
+    <p class="note">Manual account routing for pooled models: pin a key per
+       model, keep failover automatic when it cools down or runs out.</p>
+    <p class="note"><a href="{routing}/admin" target="_blank" rel="noopener">Open
+       tokenpool control panel</a> &middot; <code>{routing}/admin</code></p>
+  </div>
+
+  <div class="card">
     <h2>Services</h2>
     <table>
       <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th><th>Key</th></tr>
@@ -1015,6 +1048,9 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
             query = urllib.parse.parse_qs(parsed.query)
             memory = "off" if query.get("memory") == ["off"] else "on"
             accounts = query.get("accounts", [""])[0]
+            # Payloads declare tokenpool only when explicitly configured;
+            # the page link can still default to this host's :8940.
+            tokenpool_url = os.environ.get("MAR_TOKENPOOL_URL", "").strip()
             try:
                 overrides = _account_pairs(accounts)
                 if overrides:
@@ -1031,13 +1067,17 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
             if parsed.path == "/config.sh":
                 self._send(
                     200,
-                    render_config(registry, "bash", backend, memory, accounts),
+                    render_config(
+                        registry, "bash", backend, memory, accounts, tokenpool_url
+                    ),
                     "text/x-shellscript; charset=utf-8",
                 )
             elif parsed.path == "/config.ps1":
                 self._send(
                     200,
-                    render_config(registry, "powershell", backend, memory, accounts),
+                    render_config(
+                        registry, "powershell", backend, memory, accounts, tokenpool_url
+                    ),
                     "text/plain; charset=utf-8",
                 )
             elif parsed.path == "/":

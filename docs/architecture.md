@@ -14,6 +14,7 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
 | `bootstrap.py` | startup prompt renderer; one-shot sync orchestration | registry, providers, omp |
 | `store.py` | Storage backends (file), backend selection + config | stdlib |
 | `vault.py` | Optional KV-v2 registry backend (stdlib urllib client) | stdlib |
+| `tokenpool.py` | Read tokenpool `/v1/models`; build the omp `tokenpool` provider entry for export | stdlib |
 
 ## Registry file contract (`~/.mar/registry.json`)
 
@@ -80,6 +81,18 @@ file. The config file stores no secret values: the token resolves from
 `vault.token_file` (read at use time) or `vault.token_env` (default
 `VAULT_TOKEN`). The token travels only in the `X-Vault-Token` header — never
 in a URL, body, or error message (test-enforced).
+
+## tokenpool provider declaration
+
+`mar export` declares the tokenpool proxy as an omp provider when
+`--tokenpool URL` or `$MAR_TOKENPOOL_URL` is set. `tokenpool.py` reads
+`{base}/v1/models` (optional `$MAR_TOKENPOOL_TOKEN` bearer), validates the
+aliases' `context_window`/`max_tokens`, and emits a keyless
+`openai-completions` provider (`auth: none`, `baseUrl` normalized to `/v1`)
+alongside any self-hosted endpoint declarations. `mar serve` passes the same
+env URL to each `/config.*` payload and shows a Routing card linking to
+`<base>/admin` (derived from the page host at :8940 when the env is unset).
+MAR never forwards model traffic.
 
 ## Usage fetchers
 
