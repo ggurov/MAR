@@ -311,12 +311,13 @@ CATALOG: tuple[Provider, ...] = (
         export_env_var="COMMAND_CODE_API_KEY",
         export_oauth_env_var="",
         default_model=None,
-        limits_kind="manual",
+        limits_kind="api",
         verified=True,
         notes=(
             "omp id + env confirmed in omp's provider roster and model cache "
-            "(2026-10-10; 88 models: Claude/DeepSeek/GPT lines). omp usage "
-            "reports credit balance + 5h/weekly windows; keys validated "
+            "(2026-10-10; 88 models: Claude/DeepSeek/GPT lines). Live usage "
+            "from GET /alpha/billing/credits (per-key balance + 5h/weekly "
+            "windows, both reset epochs) verified 2026-11-08; keys validated "
             "against /alpha/whoami."),
     ),
     Provider(

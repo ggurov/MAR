@@ -41,6 +41,7 @@ __all__ = [
 _open = urllib.request.urlopen  # module-level injectable; tests monkeypatch limits._open
 
 _OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
+_COMMANDCODE_CREDITS_URL = "https://api.commandcode.ai/alpha/billing/credits"
 _DEFAULT_TIMEOUT = 10.0
 
 
@@ -58,6 +59,8 @@ class LimitItem:
         limit: Granted amount, or None when usage is not limit-bounded.
         unit: Measurement unit, e.g. ``"USD"``.
         window: Period the numbers cover, e.g. ``"all-time"``.
+        reset_at_ms: Epoch milliseconds when the window resets; 0 when the
+            provider does not report a reset.
     """
 
     name: str
@@ -65,6 +68,7 @@ class LimitItem:
     limit: float | None
     unit: str
     window: str
+    reset_at_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -326,9 +330,112 @@ def _fetch_local_endpoint(
     )
 
 
+
+def _optional_number(data: dict, field: str) -> float | None:
+    """Extract an optional numeric (non-bool) field.
+
+    Args:
+        data: Mapping that may hold the field.
+        field: Field name to read.
+
+    Returns:
+        The value as float, or None when absent/null.
+
+    Raises:
+        LimitError: When present but not a number.
+    """
+    value = data.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise LimitError(f"billing response field {field!r} must be numeric")
+    return float(value)
+
+
+def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
+    """GET commandcode's billing endpoint for the key's own usage.
+
+    The response is account-scoped: two valid keys on the same plan can
+    report different balances and window usage. Windows render in order
+    5h, 7d, then the monthly credit balance.
+
+    Args:
+        key: commandcode API key (bearer token).
+        timeout: Request timeout in seconds.
+
+    Returns:
+        LimitSnapshot with ``5h``/``7d`` items in credits (plus their reset
+        epoch) and a ``balance`` item in USD.
+
+    Raises:
+        LimitError: On HTTP/connection/timeout failures, malformed JSON, a
+            non-numeric field, or a response without any balance/window.
+            Never includes ``key`` in the message.
+    """
+    request = urllib.request.Request(
+        _COMMANDCODE_CREDITS_URL,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            # commandcode's edge rejects the default Python-urllib UA (403).
+            "User-Agent": "MAR/1.0 (+https://github.com/ggurov/MAR)",
+        },
+        method="GET",
+    )
+    payload = _read_json(request, timeout, api_name="commandcode billing API")
+    items: list[LimitItem] = []
+    windows = payload.get("windowLimits")
+    if isinstance(windows, dict):
+        for field, label in (("fiveHour", "5h"), ("weekly", "7d")):
+            entry = windows.get(field)
+            if not isinstance(entry, dict):
+                continue
+            used = _optional_number(entry, "used")
+            cap = _optional_number(entry, "cap")
+            if used is None and cap is None:
+                continue
+            raw_reset = entry.get("resetAt") or 0
+            reset = (
+                int(raw_reset)
+                if isinstance(raw_reset, (int, float)) and not isinstance(raw_reset, bool)
+                else 0
+            )
+            items.append(
+                LimitItem(
+                    name=label,
+                    used=used,
+                    limit=cap,
+                    unit="credits",
+                    window=label,
+                    reset_at_ms=max(reset, 0),
+                )
+            )
+    credits = payload.get("credits")
+    balance = _optional_number(credits, "monthlyCredits") if isinstance(credits, dict) else None
+    if balance is not None:
+        items.append(
+            LimitItem(
+                name="balance",
+                used=None,
+                limit=balance,
+                unit="USD",
+                window="monthly",
+            )
+        )
+    if not items:
+        raise LimitError("commandcode billing response has no credit balance or window limits")
+    return LimitSnapshot(
+        provider="commandcode",
+        fetched_at=_now_iso(),
+        items=tuple(items),
+        source="api",
+    )
+
+
 _FETCHERS: dict[str, Callable[[str, float], LimitSnapshot]] = {
     "openrouter": _fetch_openrouter,
     "gemini": _fetch_gemini,
+    "commandcode": _fetch_commandcode,
 }
 
 

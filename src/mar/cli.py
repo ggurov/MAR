@@ -162,6 +162,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="hindsight API URL (default: $MAR_MEMORY_URL or "
         f"{DEFAULT_GLOBAL_MEMORY_URL})",
     )
+    p_exp.add_argument(
+        "--account",
+        action="append",
+        default=[],
+        metavar="PROVIDER=LABEL",
+        help="serve this account for this export only (repeatable; the "
+        "registry selection is not changed)",
+    )
     p_exp.add_argument("--registry", default=None, metavar="PATH")
     _backend_flag(p_exp)
     p_exp.set_defaults(func=_cmd_export)
@@ -423,6 +431,12 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             if snap.note:
                 print(f"  {snap.note}")
             for item in snap.items:
+                if item.used is None and item.limit is not None:
+                    print(
+                        f"  {item.name}: {item.limit:g} {item.unit} remaining "
+                        f"({item.window})"
+                    )
+                    continue
                 used = "?" if item.used is None else item.used
                 cap = "?" if item.limit is None else item.limit
                 print(f"  {item.name}: {used} / {cap} {item.unit} ({item.window})")
@@ -488,6 +502,15 @@ def _ps_verbatim_arg(value: str) -> str:
 
 def _cmd_export(args: argparse.Namespace) -> int:
     reg = _load(args)
+    for spec in getattr(args, "account", []):
+        if "=" not in spec:
+            print(
+                f"mar: --account expects PROVIDER=LABEL, got {spec!r}",
+                file=sys.stderr,
+            )
+            return 2
+        provider_id, label = spec.split("=", 1)
+        reg.select_account(provider_id, label)
     pairs: list[tuple[str, str]] = []
     # Endpoint vars are addresses, not secrets: they stay readable under --redact.
     url_vars: set[str] = set()

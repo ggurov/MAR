@@ -195,10 +195,10 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | --- | --- |
 | `mar add <provider> --key KEY` | Register a subscription (`--key-stdin` avoids shell history; `--default` picks a model) |
 | `mar list [--json]` | Active subscriptions, masked keys, default models |
-| `mar limits [provider]` | Real API checks (OpenRouter credits, Gemini key-liveness); exact pointers elsewhere |
+| `mar limits [provider]` | Real API checks (OpenRouter credits, Gemini key-liveness, commandcode per-key balance + 5h/weekly windows); exact pointers elsewhere |
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt credentials from the local omp install (`agent.db` OAuth logins + `.env` keys) into the registry |
-| `mar export [--shell bash] [--memory on\|off] [--memory-url URL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--memory off` writes `memory.backend off` |
+| `mar export [--shell bash] [--memory on\|off] [--memory-url URL] [--account PROVIDER=LABEL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--account` pins a key for this run without changing the saved selection; `--memory off` writes `memory.backend off` |
 | `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, per-provider key radios, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request — ops (Windows task, auto-restart, logs, re-register): [docs/serve-operations.md](docs/serve-operations.md) |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar account add <provider> <name> --key-stdin` | Add an alternate key for the same provider (another account); the primary key stays stored |
@@ -217,11 +217,15 @@ mar account select commandcode joesacct1           # export/sync/serve now emit 
 mar account select commandcode original            # back to your own account
 ```
 
-`mar serve` shows one row per key with a radio button, so the switch is one
-click on the web page: the payloads (`/config.sh`, `/config.ps1`) and
-`mar export` output change immediately. A running omp session caches `.env` at
-startup — restart it (or re-apply the payload) after switching. Selections
-and alternate keys live in the registry (schema v2; v1 files load unchanged).
+`mar serve` shows one row per key with a radio button and that key's own live
+usage (commandcode balance/windows are fetched per key), so the switch is one
+click. The page's apply commands carry the choice explicitly, e.g.
+`curl -fsSL http://host/config.sh?memory=on&accounts=commandcode=joesacct1 | sh`;
+the `?accounts=` query pins the served key for that payload without changing
+the saved selection. Re-copy the command after flipping. A running omp session
+caches `.env` at startup — restart it (or re-apply the payload) after
+switching. Selections and alternate keys live in the registry (schema v2; v1
+files load unchanged).
 
 ## Where keys live (and don't)
 
