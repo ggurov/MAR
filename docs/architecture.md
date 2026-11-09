@@ -56,6 +56,11 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
   never overwritten by account selection.
 - `version: 1` registries (no accounts) still load; the next save writes
   version 2.
+- `mar serve` payload URLs accept `?accounts=provider=label,...`; the handler
+  validates each pair against the registry, applies it in memory only, and
+  `mar export --account provider=label` does the same. This is how the page's
+  apply commands visibly pin the selected key (the saved selection is
+  untouched).
 - Writes are atomic (temp file + `os.replace`); `0o600` best-effort; on Windows
   chmod is a no-op — documented, not faked.
 
@@ -75,6 +80,14 @@ file. The config file stores no secret values: the token resolves from
 `vault.token_file` (read at use time) or `vault.token_env` (default
 `VAULT_TOKEN`). The token travels only in the `X-Vault-Token` header — never
 in a URL, body, or error message (test-enforced).
+
+## Usage fetchers
+
+`limits_kind == "api"` catalog entries fetch live usage. `commandcode` uses
+`GET https://api.commandcode.ai/alpha/billing/credits` with the key's bearer
+token (a MAR user-agent is required; the default Python-urllib UA gets 403),
+returning the key's own monthly balance plus 5h/weekly used/cap and reset
+epochs — so alternate keys on one provider show different numbers.
 
 ## omp integration contract
 

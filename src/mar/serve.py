@@ -38,8 +38,38 @@ _usage_locks: dict[str, threading.Lock] = {}
 _usage_locks_guard = threading.Lock()
 
 
+def _account_pairs(raw: str) -> list[tuple[str, str]]:
+    """Parse a comma-separated ``PROVIDER=LABEL`` account override list.
+
+    Args:
+        raw: Query value, e.g. ``"commandcode=joesacct1"``; empty is valid.
+
+    Returns:
+        ``(provider, label)`` pairs in input order.
+
+    Raises:
+        ValueError: When an entry lacks ``=`` or has an empty side.
+    """
+    pairs: list[tuple[str, str]] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise ValueError(f"accounts entry {chunk!r} must be PROVIDER=LABEL")
+        provider, label = chunk.split("=", 1)
+        if not provider or not label:
+            raise ValueError(f"accounts entry {chunk!r} must be PROVIDER=LABEL")
+        pairs.append((provider, label))
+    return pairs
+
+
 def render_config(
-    registry: Path, shell: str, backend: str | None = None, memory: str = "on"
+    registry: Path,
+    shell: str,
+    backend: str | None = None,
+    memory: str = "on",
+    accounts: str = "",
 ) -> str:
     """Render the ``mar export`` payload for one shell, minus the markers.
 
@@ -50,6 +80,8 @@ def render_config(
             through, otherwise the file backend is forced via the path.
         memory: ``"on"`` (default) configures the global hindsight backend;
             ``"off"`` writes ``memory.backend off`` so the box stops using memory.
+        accounts: Optional ``PROVIDER=LABEL`` overrides (comma-separated)
+            that pin the served key for this payload only.
 
     Returns:
         The payload body exactly as ``mar export`` prints between the
@@ -67,6 +99,8 @@ def render_config(
     else:
         argv += ["--registry", str(registry)]
     argv += ["--memory", memory]
+    for provider, label in _account_pairs(accounts):
+        argv += ["--account", f"{provider}={label}"]
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         cli.main(argv)
     lines = [
@@ -94,6 +128,47 @@ def _provider_usage_lock(cache_key: str) -> threading.Lock:
     with _usage_locks_guard:
         return _usage_locks.setdefault(cache_key, threading.Lock())
 
+def _format_snapshot_items(items: tuple) -> str:
+    """Format one live ``LimitSnapshot``'s items into a quota cell.
+
+    USD items read like the OpenRouter cell (``"$315.00 left"``); numeric
+    windows render ``"5h 0.45/14 cr"`` with a parenthesized reset when the
+    provider reports one. Multiple items join with ``·``.
+
+    Args:
+        items: ``LimitSnapshot.items`` from ``limits.fetch``.
+
+    Returns:
+        The cell text, or ``""`` when no item carries a value.
+    """
+    parts: list[str] = []
+    now = time.time()
+    for item in items:
+        unit = (item.unit or "").lower()
+        if unit in ("usd", "$"):
+            if item.used is not None and item.limit is not None:
+                parts.append(f"${item.limit - item.used:.2f} left")
+            elif item.limit is not None:
+                parts.append(f"${item.limit:.2f} left")
+            elif item.used is not None:
+                parts.append(f"${item.used:.2f} used")
+            continue
+        suffix = "cr" if unit.startswith("cre") else item.unit
+        if item.used is not None and item.limit is not None:
+            text = f"{item.name} {item.used:g}/{item.limit:g} {suffix}".rstrip()
+        elif item.limit is not None:
+            text = f"{item.name} {item.limit:g} {suffix}".rstrip()
+        elif item.used is not None:
+            text = f"{item.name} {item.used:g} {suffix}".rstrip()
+        else:
+            continue
+        if item.reset_at_ms:
+            resets = (item.reset_at_ms / 1000 - now) / 3600
+            text += f" (resets in {_format_duration(resets)})"
+        parts.append(text)
+    return " \u00b7 ".join(parts)
+
+
 def _fetch_usage_cell(provider: str, key: str | None) -> str:
     """Fetch one provider's live quota cell.
 
@@ -102,10 +177,7 @@ def _fetch_usage_cell(provider: str, key: str | None) -> str:
     """
     snapshot = limits.fetch(provider, key or "", timeout=5.0)
     if snapshot.items:
-        item = snapshot.items[0]
-        if item.limit is not None:
-            return f"${item.limit - (item.used or 0):.2f} left"
-        return f"${item.used or 0:.2f} used"
+        return _format_snapshot_items(snapshot.items) or (snapshot.note or "ok")
     return snapshot.note or "ok"
 
 
@@ -426,9 +498,10 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
         selected_label = sub.selected_account or PRIMARY_ACCOUNT
         keys = [(PRIMARY_ACCOUNT, sub.key)]
         keys.extend((account.name, account.key) for account in sub.accounts)
+        shared_quota = None if sub.accounts else omp_quota
         for label, key in keys:
             selected = label == selected_label
-            quota = omp_quota if selected else None
+            quota = shared_quota
             if quota is None:
                 quota = _usage_cell(sub.provider, key, account=label)
             rows.append(
@@ -459,8 +532,6 @@ def render_index_html(host: str, registry: Path) -> str:
         (quota, renewal, provider usage link), a plaintext-HTTP warning, and the
         GitHub repo link.
     """
-    sh_cmd = f"curl -fsSL http://{host}/config.sh?memory=on | sh"
-    ps_cmd = f"irm http://{host}/config.ps1?memory=on | iex"
     memory_url = os.environ.get("MAR_MEMORY_URL") or cli.DEFAULT_GLOBAL_MEMORY_URL
     dashboard_link = (
         f'<a href="{HINDSIGHT_DASHBOARD_URL}" target="_blank"'
@@ -471,6 +542,18 @@ def render_index_html(host: str, registry: Path) -> str:
     key_counts: dict[str, int] = {}
     for row in snapshot:
         key_counts[row["provider"]] = key_counts.get(row["provider"], 0) + 1
+    picked = [
+        f"{row['provider']}={row['account']}"
+        for row in snapshot
+        if key_counts.get(row["provider"], 0) > 1 and row["selected"]
+    ]
+    accounts_query = "&accounts=" + ",".join(picked) if picked else ""
+    sh_cmd = html_mod.escape(
+        f"curl -fsSL http://{host}/config.sh?memory=on{accounts_query} | sh"
+    )
+    ps_cmd = html_mod.escape(
+        f"irm http://{host}/config.ps1?memory=on{accounts_query} | iex"
+    )
     for row in snapshot:
         usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
         name = html_mod.escape(row["provider"])
@@ -562,7 +645,7 @@ def render_index_html(host: str, registry: Path) -> str:
     <code class="cmd" id="sh-cmd">{sh_cmd}</code>
     <div class="row">
       <button onclick="copyEl('sh-cmd', this)">Copy command</button>
-      <button class="ghost" onclick="copyFetch('/config.sh?memory='+memParam(), this)">Copy payload</button>
+      <button class="ghost" onclick="copyFetch('/config.sh?memory='+memParam()+accountsParam(), this)">Copy payload</button>
     </div>
   </div>
 
@@ -571,7 +654,7 @@ def render_index_html(host: str, registry: Path) -> str:
     <code class="cmd" id="ps-cmd">{ps_cmd}</code>
     <div class="row">
       <button onclick="copyEl('ps-cmd', this)">Copy command</button>
-      <button class="ghost" onclick="copyFetch('/config.ps1?memory='+memParam(), this)">Copy payload</button>
+      <button class="ghost" onclick="copyFetch('/config.ps1?memory='+memParam()+accountsParam(), this)">Copy payload</button>
     </div>
   </div>
 
@@ -630,12 +713,18 @@ async function copyFetch(path, btn) {{
 function memParam() {{
   return document.getElementById('global-memory').checked ? 'on' : 'off';
 }}
+function accountsParam() {{
+  const out = [];
+  document.querySelectorAll('input[type="radio"][name^="acct-"]:checked')
+    .forEach(function (el) {{ out.push(el.name.slice(5) + '=' + el.value); }});
+  return out.length ? '&accounts=' + out.join(',') : '';
+}}
 function refreshCommands() {{
   const HOST = "{host}";
   document.getElementById('sh-cmd').textContent =
-    'curl -fsSL http://' + HOST + '/config.sh?memory=' + memParam() + ' | sh';
+    'curl -fsSL http://' + HOST + '/config.sh?memory=' + memParam() + accountsParam() + ' | sh';
   document.getElementById('ps-cmd').textContent =
-    'irm http://' + HOST + '/config.ps1?memory=' + memParam() + ' | iex';
+    'irm http://' + HOST + '/config.ps1?memory=' + memParam() + accountsParam() + ' | iex';
 }}
 document.getElementById('global-memory').addEventListener('change', refreshCommands);
 refreshCommands();
@@ -710,21 +799,32 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
         def do_GET(self) -> None:  # stdlib naming convention
             host = self.headers.get("Host", "localhost")
             parsed = urllib.parse.urlsplit(self.path)
-            memory = (
-                "off"
-                if urllib.parse.parse_qs(parsed.query).get("memory") == ["off"]
-                else "on"
-            )
+            query = urllib.parse.parse_qs(parsed.query)
+            memory = "off" if query.get("memory") == ["off"] else "on"
+            accounts = query.get("accounts", [""])[0]
+            try:
+                overrides = _account_pairs(accounts)
+                if overrides:
+                    reg = (
+                        Registry.load(None, backend=backend)
+                        if backend
+                        else Registry.load(registry)
+                    )
+                    for provider, label in overrides:
+                        reg.select_account(provider, label)
+            except (ValueError, cli.registry.RegistryError) as exc:
+                self._send(400, f"{exc}\n", "text/plain; charset=utf-8")
+                return
             if parsed.path == "/config.sh":
                 self._send(
                     200,
-                    render_config(registry, "bash", backend, memory),
+                    render_config(registry, "bash", backend, memory, accounts),
                     "text/x-shellscript; charset=utf-8",
                 )
             elif parsed.path == "/config.ps1":
                 self._send(
                     200,
-                    render_config(registry, "powershell", backend, memory),
+                    render_config(registry, "powershell", backend, memory, accounts),
                     "text/plain; charset=utf-8",
                 )
             elif parsed.path == "/":

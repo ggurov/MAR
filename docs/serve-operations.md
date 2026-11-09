@@ -14,8 +14,13 @@ rights required anywhere.
 - Providers with alternate keys (``mar account add``) get one table row per
   key and a radio button. Clicking a radio POSTs ``/select``; the server
   validates the label, writes ``selected_account`` to the registry, and
-  reloads. ``/config.sh`` / ``/config.ps1`` then serve that key. Running omp
-  sessions cache ``.env`` at startup, so restart them after switching.
+  reloads. The apply commands include the choice as
+  ``?accounts=provider=label`` (multiple providers comma-separated), and the
+  payload handler applies that query in memory for that request only — the
+  line you copy names the key it will deliver. ``/config.sh`` /
+  ``/config.ps1`` also serve the saved selection when the query is omitted.
+  Running omp sessions cache ``.env`` at startup, so restart them after
+  switching.
 - Windows Firewall rule `MAR config server`: TCP 8930 inbound, **LocalSubnet
   only**, Private+Domain profiles (created once with elevation; the rule itself
   never needs admin again).

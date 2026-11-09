@@ -65,7 +65,7 @@ def raises_open(exc: Exception):
 def test_supported_lists_api_kind_ids_in_catalog_order():
     from mar.providers import CATALOG
 
-    assert supported() == ["openrouter", "gemini", "strata", "qwen"]
+    assert supported() == ["openrouter", "gemini", "commandcode", "strata", "qwen"]
     assert supported() == [p.id for p in CATALOG if p.limits_kind == "api"]
 
 STRATA_URL = "http://deepseek.nj02.gurov.us/v1"
@@ -413,3 +413,79 @@ def test_limit_snapshot_note_defaults_to_empty():
     assert snapshot.note == ""
     with pytest.raises(dataclasses.FrozenInstanceError):
         snapshot.provider = "zai"
+
+
+COMMANDCODE_URL = "https://api.commandcode.ai/alpha/billing/credits"
+
+
+def commandcode_payload(**overrides) -> dict:
+    """Build a commandcode /alpha/billing/credits response body."""
+    body = {
+        "credits": {"monthlyCredits": 6.3993336754, "purchasedCredits": 0, "freeCredits": 0},
+        "windowLimits": {
+            "fiveHour": {"used": 0, "cap": 14, "exceeded": False, "resetAt": 1794209750036},
+            "weekly": {"used": 7.3100395867, "cap": 35, "exceeded": False, "resetAt": 1794537384556},
+        },
+    }
+    body.update(overrides)
+    return body
+
+
+def test_commandcode_fetches_balance_and_windows_per_key():
+    """commandcode usage is key-scoped: balance + 5h/7d credits with resets."""
+    calls = []
+
+    def fake(request, timeout):
+        calls.append(request)
+        return FakeResponse(json.dumps(commandcode_payload()).encode())
+
+    import mar.limits as limits_mod
+
+    original = limits_mod._open
+    limits_mod._open = fake
+    try:
+        snap = fetch("commandcode", "user_fake_key_1234567890")
+    finally:
+        limits_mod._open = original
+
+    assert snap.source == "api"
+    assert [item.name for item in snap.items] == ["5h", "7d", "balance"]
+    five, weekly, balance = snap.items
+    assert (five.used, five.limit, five.unit) == (0.0, 14.0, "credits")
+    assert five.reset_at_ms == 1794209750036
+    assert (weekly.used, weekly.limit) == (7.3100395867, 35.0)
+    assert (balance.used, balance.limit, balance.unit) == (None, 6.3993336754, "USD")
+    assert calls[0].full_url == COMMANDCODE_URL
+    assert calls[0].get_header("Authorization") == "Bearer user_fake_key_1234567890"
+    assert calls[0].get_header("User-agent").startswith("MAR/")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"credits": None, "windowLimits": None},
+        {"windowLimits": {"fiveHour": {"used": "nope", "cap": 14}}},
+    ],
+)
+def test_commandcode_malformed_payload_raises(payload):
+    """Missing/non-numeric usage data is a LimitError, never a fake zero."""
+    import mar.limits as limits_mod
+
+    original = limits_mod._open
+    limits_mod._open = lambda request, timeout: FakeResponse(json.dumps(payload).encode())
+    try:
+        with pytest.raises(LimitError):
+            fetch("commandcode", KEY)
+    finally:
+        limits_mod._open = original
+
+
+def test_commandcode_error_never_leaks_key(monkeypatch):
+    """A 401 from the billing route surfaces without the key in the message."""
+    monkeypatch.setattr(
+        limits, "_open", raises_open(urllib.error.HTTPError(COMMANDCODE_URL, 401, "denied", {}, None))
+    )
+    with pytest.raises(LimitError) as excinfo:
+        fetch("commandcode", KEY)
+    assert KEY not in str(excinfo.value)

@@ -180,6 +180,7 @@ def test_limits_kind_api_providers_include_both_local_endpoints():
     assert [p.id for p in api_providers] == [
         "openrouter",
         "gemini",
+        "commandcode",
         "strata",
         "qwen",
     ]

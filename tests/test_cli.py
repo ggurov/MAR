@@ -1131,3 +1131,32 @@ class TestAccounts:
         assert run(reg_path, "list", "--json") == 0
         assert json.loads(capsys.readouterr().out)[0]["accounts"] == []
         assert run(reg_path, "account", "remove", "commandcode", "joesacct1") == 1
+
+
+class TestExportAccountOverride:
+    def test_export_account_pins_key_without_persisting(self, reg_path, capsys):
+        run(reg_path, "add", "commandcode", "--key", "user_primary-key-1234567890")
+        run(
+            reg_path, "account", "add", "commandcode", "joesacct1",
+            "--key", "user_joesacct1-key-9876543210",
+        )
+        capsys.readouterr()
+        assert (
+            run(
+                reg_path, "export", "--shell", "bash",
+                "--account", "commandcode=joesacct1",
+            )
+            == 0
+        )
+        out = capsys.readouterr().out
+        assert "COMMAND_CODE_API_KEY=user_joesacct1-key-9876543210" in out
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        assert data["subscriptions"][0]["selected_account"] == ""
+
+    def test_export_account_malformed_spec_is_usage_error(self, reg_path):
+        run(reg_path, "add", "commandcode", "--key", "user_primary-key-1234567890")
+        assert run(reg_path, "export", "--account", "commandcode") == 2
+
+    def test_export_account_unknown_label_is_runtime_error(self, reg_path):
+        run(reg_path, "add", "commandcode", "--key", "user_primary-key-1234567890")
+        assert run(reg_path, "export", "--account", "commandcode=ghost") == 1

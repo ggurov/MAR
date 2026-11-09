@@ -25,7 +25,7 @@ ids were additionally observed live in `~/.omp/agent/agent.db`; `strata` and
 | 9 | copilot | GitHub Copilot | github-copilot | env `COPILOT_GITHUB_TOKEN` | https://github.com/settings/tokens | https://github.com/settings/copilot | manual |
 | 10 | jev | Jev (Typesafe) | typesafe | env `TYPESAFE_API_KEY` | https://typesafe.ai | https://console.typesafe.ai/usage | manual |
 | 11 | gemini | Google Gemini | google | env `GEMINI_API_KEY` | https://aistudio.google.com/api/keys | https://aistudio.google.com/usage | manual |
-| 12 | commandcode | Command Code | commandcode | env `COMMAND_CODE_API_KEY` | https://commandcode.ai | https://commandcode.ai/settings/usage | manual |
+| 12 | commandcode | Command Code | commandcode | env `COMMAND_CODE_API_KEY` | https://commandcode.ai | https://commandcode.ai/settings/usage | api (`GET /alpha/billing/credits`: per-key balance + 5h/weekly windows) |
 | 13 | strata | Strata (local llama.cpp) | llama.cpp | env `LLAMA_CPP_BASE_URL` (endpoint; no key) | — | `{endpoint}/models` probe | api |
 | 14 | qwen | Qwen (local llama.cpp) | lm-studio | env `LM_STUDIO_BASE_URL` (endpoint; no key) | — | `{endpoint}/models` probe | api |
 

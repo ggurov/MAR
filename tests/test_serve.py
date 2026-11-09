@@ -900,3 +900,131 @@ class TestAlternateAccounts:
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             _post_json(f"{url}/select", payload)
         assert excinfo.value.code == 400
+
+
+class TestPerAccountUsage:
+    def test_each_key_shows_its_own_usage_not_the_omp_snapshot(
+        self, account_server, monkeypatch
+    ):
+        _, path = account_server
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_usage_locks", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "commandcode",
+                        "limits": [
+                            {
+                                "id": "commandcode:5h",
+                                "amount": {"used": 0, "limit": 14, "unit": "credits"},
+                                "window": {"resetsAt": 0},
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        calls: list[tuple[str, str | None]] = []
+
+        def fake_fetch(provider_id, key, **kwargs):
+            calls.append((provider_id, key))
+            used = 0.0 if key == PRIMARY_CC else 7.31
+            return limits.LimitSnapshot(
+                provider=provider_id,
+                fetched_at="2026-11-08T00:00:00+00:00",
+                items=(limits.LimitItem("5h", used, 14.0, "credits", "5h"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        rows = [r for r in serve.services_snapshot(path) if r["provider"] == "commandcode"]
+        assert [r["account"] for r in rows] == ["original", "joesacct1"]
+        assert rows[0]["usage"] == "5h 0/14 cr"
+        assert rows[1]["usage"] == "5h 7.31/14 cr"
+        assert calls == [("commandcode", PRIMARY_CC), ("commandcode", ALT_CC)]
+
+    def test_switching_selection_does_not_move_usage(self, account_server, monkeypatch):
+        _, path = account_server
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_usage_locks", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+
+        def fake_fetch(provider_id, key, **kwargs):
+            used = 0.0 if key == PRIMARY_CC else 7.31
+            return limits.LimitSnapshot(
+                provider=provider_id,
+                fetched_at="2026-11-08T00:00:00+00:00",
+                items=(limits.LimitItem("5h", used, 14.0, "credits", "5h"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        before = [r["usage"] for r in serve.services_snapshot(path) if r["provider"] == "commandcode"]
+        assert (
+            cli.main(
+                [
+                    "account", "select", "commandcode", "joesacct1",
+                    "--registry", str(path),
+                ]
+            )
+            == 0
+        )
+        after = [r for r in serve.services_snapshot(path) if r["provider"] == "commandcode"]
+        assert [r["usage"] for r in after] == before
+        assert [r["selected"] for r in after] == [False, True]
+
+
+class TestAccountPinnedCommands:
+    def test_render_config_honors_account_override(self, account_server):
+        _, path = account_server
+        body = serve.render_config(path, "bash", accounts="commandcode=joesacct1")
+        assert f"COMMAND_CODE_API_KEY={ALT_CC}" in body
+        assert PRIMARY_CC not in body
+        assert json.loads(path.read_text(encoding="utf-8"))["subscriptions"][0][
+            "selected_account"
+        ] == ""
+
+    def test_config_sh_query_pins_account_without_persisting(self, account_server):
+        url, path = account_server
+        body = urllib.request.urlopen(
+            f"{url}/config.sh?accounts=commandcode=joesacct1", timeout=5
+        ).read().decode("utf-8")
+        assert f"COMMAND_CODE_API_KEY={ALT_CC}" in body
+        assert json.loads(path.read_text(encoding="utf-8"))["subscriptions"][0][
+            "selected_account"
+        ] == ""
+
+    @pytest.mark.parametrize(
+        "query",
+        ["accounts=commandcode", "accounts=commandcode%3Dghost", "accounts=%3Dx"],
+    )
+    def test_bad_account_query_is_400(self, account_server, query):
+        url, _ = account_server
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(f"{url}/config.sh?{query}", timeout=5)
+        assert excinfo.value.code == 400
+
+    def test_page_command_names_the_selected_account(self, account_server, monkeypatch):
+        _, path = account_server
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        html = serve.render_index_html("localhost:8930", path)
+        assert "accountsParam" in html
+        assert "accounts=commandcode=original" in html
+        assert (
+            cli.main(
+                [
+                    "account", "select", "commandcode", "joesacct1",
+                    "--registry", str(path),
+                ]
+            )
+            == 0
+        )
+        html = serve.render_index_html("localhost:8930", path)
+        assert "accounts=commandcode=joesacct1" in html
