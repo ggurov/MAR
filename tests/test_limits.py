@@ -449,15 +449,34 @@ def test_commandcode_fetches_balance_and_windows_per_key():
         limits_mod._open = original
 
     assert snap.source == "api"
-    assert [item.name for item in snap.items] == ["5-hour", "Weekly", "Balance"]
-    five, weekly, balance = snap.items
+    assert [item.name for item in snap.items] == ["5-hour", "Weekly", "Monthly"]
+    five, weekly, monthly = snap.items
     assert (five.used, five.limit, five.unit) == (0.0, 14.0, "credits")
     assert five.reset_at_ms == 1794209750036
     assert (weekly.used, weekly.limit) == (7.3100395867, 35.0)
-    assert (balance.used, balance.limit, balance.unit) == (None, 6.3993336754, "USD")
+    # monthly allowance = weekly cap * 2; remaining 6.399 -> ~91% used
+    assert (monthly.limit, monthly.unit) == (70.0, "USD")
+    assert monthly.used == pytest.approx(63.6006663246)
+    assert monthly.used / monthly.limit == pytest.approx(0.9085809475)
     assert calls[0].full_url == COMMANDCODE_URL
     assert calls[0].get_header("Authorization") == "Bearer user_fake_key_1234567890"
     assert calls[0].get_header("User-agent").startswith("MAR/")
+
+
+def test_commandcode_without_window_caps_falls_back_to_balance():
+    """No rolling caps means the monthly allowance is unknown: text only."""
+    import mar.limits as limits_mod
+
+    original = limits_mod._open
+    limits_mod._open = lambda request, timeout: FakeResponse(
+        json.dumps({"credits": {"monthlyCredits": 6.4}}).encode()
+    )
+    try:
+        snap = fetch("commandcode", KEY)
+    finally:
+        limits_mod._open = original
+    assert [item.name for item in snap.items] == ["Balance"]
+    assert (snap.items[0].used, snap.items[0].limit) == (None, 6.4)
 
 
 @pytest.mark.parametrize(

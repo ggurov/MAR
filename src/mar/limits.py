@@ -357,15 +357,22 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
 
     The response is account-scoped: two valid keys on the same plan can
     report different balances and window usage. Windows render in order
-    5h, 7d, then the monthly credit balance.
+    5-hour, Weekly, then Monthly.
+
+    commandcode does not return the monthly allowance directly, but the
+    rolling caps are fixed slices of it: weekly is half and the 5-hour cap is
+    a fifth, so ``monthly = weekly_cap * 2`` (fallback ``5h_cap * 5``).
+    ``monthlyCredits`` is the remaining plan balance; purchased/free credits
+    are subtracted because they are not part of the monthly allowance.
 
     Args:
         key: commandcode API key (bearer token).
         timeout: Request timeout in seconds.
 
     Returns:
-        LimitSnapshot with ``5h``/``7d`` items in credits (plus their reset
-        epoch) and a ``balance`` item in USD.
+        LimitSnapshot with ``5-hour``/``Weekly`` items in credits (plus their
+        reset epoch) and a ``Monthly`` item in USD. Without window caps the
+        fallback is a plain ``Balance`` item (no percentage).
 
     Raises:
         LimitError: On HTTP/connection/timeout failures, malformed JSON, a
@@ -384,6 +391,7 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
     )
     payload = _read_json(request, timeout, api_name="commandcode billing API")
     items: list[LimitItem] = []
+    caps: dict[str, float | None] = {}
     windows = payload.get("windowLimits")
     if isinstance(windows, dict):
         for field, label in (("fiveHour", "5-hour"), ("weekly", "Weekly")):
@@ -392,6 +400,7 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
                 continue
             used = _optional_number(entry, "used")
             cap = _optional_number(entry, "cap")
+            caps[field] = cap
             if used is None and cap is None:
                 continue
             raw_reset = entry.get("resetAt") or 0
@@ -413,15 +422,35 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
     credits = payload.get("credits")
     balance = _optional_number(credits, "monthlyCredits") if isinstance(credits, dict) else None
     if balance is not None:
-        items.append(
-            LimitItem(
-                name="Balance",
-                used=None,
-                limit=balance,
-                unit="USD",
-                window="monthly",
+        purchased = _optional_number(credits, "purchasedCredits") or 0.0
+        free = _optional_number(credits, "freeCredits") or 0.0
+        plan_remaining = max(balance - purchased - free, 0.0)
+        monthly_cap = None
+        if caps.get("weekly"):
+            monthly_cap = float(caps["weekly"]) * 2
+        elif caps.get("fiveHour"):
+            monthly_cap = float(caps["fiveHour"]) * 5
+        if monthly_cap:
+            used_monthly = min(max(monthly_cap - plan_remaining, 0.0), monthly_cap)
+            items.append(
+                LimitItem(
+                    name="Monthly",
+                    used=used_monthly,
+                    limit=monthly_cap,
+                    unit="USD",
+                    window="monthly",
+                )
             )
-        )
+        else:
+            items.append(
+                LimitItem(
+                    name="Balance",
+                    used=None,
+                    limit=balance,
+                    unit="USD",
+                    window="monthly",
+                )
+            )
     if not items:
         raise LimitError("commandcode billing response has no credit balance or window limits")
     return LimitSnapshot(

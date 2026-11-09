@@ -829,9 +829,10 @@ def render_index_html(host: str, registry: Path) -> str:
   td.keys {{ white-space:nowrap; }}
   label.acct {{ display:flex; gap:6px; align-items:center; cursor:pointer; }}
   td.usage-cell {{ width:42%; min-width:220px; }}
-  .meters {{ display:flex; flex-direction:column; gap:10px; max-width:360px; }}
-  .meter .mhead {{ display:flex; justify-content:space-between; gap:12px;
-                   font-size:12.5px; margin-bottom:4px; }}
+  .meters {{ display:flex; flex-direction:row; flex-wrap:wrap; gap:10px 18px; }}
+  .meter {{ flex:1 1 130px; min-width:120px; }}
+  .meter .mhead {{ display:flex; justify-content:space-between; gap:8px;
+                   flex-wrap:wrap; font-size:12.5px; margin-bottom:4px; }}
   .mhead b {{ font-variant-numeric:tabular-nums; }}
   .bar {{ height:9px; background:#21262d; border:1px solid #30363d;
           border-radius:5px; overflow:hidden; box-sizing:border-box; }}
