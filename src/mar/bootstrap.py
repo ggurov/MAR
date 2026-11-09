@@ -7,7 +7,8 @@ Owns the bridge between MAR's registry and a fresh omp install. Two jobs:
   instruction to run ``mar omp-sync``, optionally followed by the user's
   custom ``~/.mar/prompt.md`` text.
 - ``sync`` pushes one api_key credential per active, verified subscription
-  into omp's ``agent.db``, applies model roles to ``config.yml``, and
+  (the selected alternate account's key when one is selected) into omp's
+  ``agent.db``, applies model roles to ``config.yml``, and
   declares self-hosted endpoints' models (with their real context window)
   in ``models.yml``. MAR never writes a guessed omp provider id: entries
   with an empty omp id or ``verified=False`` are skipped and reported
@@ -22,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from mar import omp, providers
+from mar import omp, providers, registry
 from mar.registry import Registry, Subscription
 
 __all__ = ["BootstrapError", "SyncReport", "render_prompt", "sync"]
@@ -157,13 +158,17 @@ def _sync_one(sub: Subscription, agent_dir: Path) -> tuple[str | None, str | Non
             return None, str(exc)
         if sub.auth_method == "none":
             return provider.omp_provider_id, None
-    if sub.auth_method != "api_key" or not sub.key:
+    try:
+        key = registry.effective_key(sub)
+    except registry.RegistryError as exc:
+        return None, str(exc)
+    if sub.auth_method != "api_key" or not key:
         return None, "no api key"
     try:
         if provider.omp_env_var:
-            omp.upsert_env_key(agent_dir, provider.omp_env_var, sub.key)
+            omp.upsert_env_key(agent_dir, provider.omp_env_var, key)
         else:
-            omp.upsert_credential(agent_dir, provider.omp_provider_id, sub.key)
+            omp.upsert_credential(agent_dir, provider.omp_provider_id, key)
     except omp.OmpError as exc:
         return None, str(exc)
     return provider.omp_provider_id, None

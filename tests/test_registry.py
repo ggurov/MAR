@@ -136,7 +136,7 @@ def test_load_missing_file_returns_empty_registry(tmp_path):
         "{}",  # missing version
         "[]",  # wrong shape, no version
         '{"subscriptions": []}',  # missing version
-        '{"version": 2, "subscriptions": []}',  # unknown version
+        '{"version": 99, "subscriptions": []}',  # unknown version
         '{"version": 1, "subscriptions": ["oops"]}',  # non-object entry
     ],
 )
@@ -174,7 +174,7 @@ def test_roundtrip_save_load(tmp_path):
     assert loaded.get("zai") == first
     assert loaded.get("openrouter").expires_at_ms == 1791660887205
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["version"] == 1
+    assert data["version"] == 2
     assert len(data["subscriptions"]) == 2
 
 
@@ -206,7 +206,7 @@ def test_load_legacy_file_without_expires_at_ms(tmp_path):
 
 
 def test_file_schema_matches_contract(tmp_path):
-    """On-disk JSON is {"version": 1, "subscriptions": [...]} with fields as-is."""
+    """On-disk JSON is {"version": 2, "subscriptions": [...]} with fields as-is."""
     path = tmp_path / "registry.json"
     reg = Registry(path)
     reg.add(sub())
@@ -223,7 +223,10 @@ def test_file_schema_matches_contract(tmp_path):
         "status",
         "notes",
         "expires_at_ms",
+        "accounts",
+        "selected_account",
     }
+    assert data["version"] == 2
     assert entry["models"] == ["glm-4.7", "glm-5.3-flash"]
 
 
@@ -270,7 +273,7 @@ def test_save_twice_file_stays_valid_json(tmp_path):
     reg.add(sub("openrouter", models=["or/free"], default_model="or/free"))
     reg.save()
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data["version"] == 1
+    assert data["version"] == 2
     assert len(data["subscriptions"]) == 2
     leftovers = [p.name for p in tmp_path.iterdir() if p.name != "registry.json"]
     assert leftovers == []
@@ -297,3 +300,173 @@ def test_explicit_path_beats_env(tmp_path, monkeypatch):
     reg.save()
     assert explicit.exists()
     assert not (tmp_path / "envhome").exists()
+
+
+# --- alternate accounts (multi-key per provider) ----------------------------
+
+from mar.registry import PRIMARY_ACCOUNT, Account, effective_key
+
+ALT_KEY = "test-alt-key-0123456789"
+
+
+def test_effective_key_defaults_to_primary(tmp_path):
+    """Without a selection, export/sync see the subscription's own key."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub())
+    reg.add_account("zai", "joesacct1", ALT_KEY)
+    assert reg.get("zai").selected_account == ""
+    assert effective_key(reg.get("zai")) == FAKE_KEY
+
+
+def test_select_account_switches_effective_key(tmp_path):
+    """select_account makes another key the one credential consumers use."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub())
+    reg.add_account("zai", "joesacct1", ALT_KEY)
+    reg.select_account("zai", "joesacct1")
+    stored = reg.get("zai")
+    assert stored.selected_account == "joesacct1"
+    assert effective_key(stored) == ALT_KEY
+    assert stored.key == FAKE_KEY  # primary key is never destroyed
+
+
+@pytest.mark.parametrize("selector", [PRIMARY_ACCOUNT, ""])
+def test_select_original_restores_primary(tmp_path, selector):
+    """Selecting the reserved 'original' label (or '') serves the primary key."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub())
+    reg.add_account("zai", "joesacct1", ALT_KEY)
+    reg.select_account("zai", "joesacct1")
+    reg.select_account("zai", selector)
+    assert effective_key(reg.get("zai")) == FAKE_KEY
+
+
+@pytest.mark.parametrize(
+    ("name", "key", "match"),
+    [
+        ("", ALT_KEY, "name"),
+        ("   ", ALT_KEY, "name"),
+        ("original", ALT_KEY, "reserved"),
+        ("bad name", ALT_KEY, "name"),
+        ("joesacct1", "", "key"),
+        ("joesacct1", "   ", "key"),
+    ],
+)
+def test_add_account_rejects_invalid_fields(tmp_path, name, key, match):
+    """Account names are labels (no blanks/spaces); keys are non-empty strings."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub())
+    with pytest.raises(RegistryError, match=match):
+        reg.add_account("zai", name, key)
+    assert reg.get("zai").accounts == []
+
+
+def test_add_account_rejects_duplicate_name(tmp_path):
+    """Two accounts on one provider cannot share a label."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub())
+    reg.add_account("zai", "joesacct1", ALT_KEY)
+    with pytest.raises(RegistryError, match="joesacct1"):
+        reg.add_account("zai", "joesacct1", "another-key-1234567890")
+
+
+def test_add_account_requires_an_api_key_subscription(tmp_path):
+    """OAuth tokens are refreshed by mar pull; alternate keys are api_key only."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub(auth_method="oauth", key="oauth-token-123456"))
+    with pytest.raises(RegistryError, match="api_key"):
+        reg.add_account("zai", "joesacct1", ALT_KEY)
+
+
+def test_add_account_unknown_provider(tmp_path):
+    """Accounts attach to an existing subscription only."""
+    reg = Registry(tmp_path / "registry.json")
+    with pytest.raises(RegistryError, match="ghost"):
+        reg.add_account("ghost", "joesacct1", ALT_KEY)
+
+
+def test_select_unknown_account_is_error(tmp_path):
+    """Selecting a label that was never added fails and changes nothing."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub())
+    with pytest.raises(RegistryError, match="missing"):
+        reg.select_account("zai", "missing")
+    assert reg.get("zai").selected_account == ""
+
+
+def test_remove_account_resets_selection(tmp_path):
+    """Removing the selected account falls back to the primary key."""
+    reg = Registry(tmp_path / "registry.json")
+    reg.add(sub())
+    reg.add_account("zai", "joesacct1", ALT_KEY)
+    reg.add_account("zai", "joesacct2", "test-alt-key-2-0123456789")
+    reg.select_account("zai", "joesacct1")
+    reg.remove_account("zai", "joesacct1")
+    assert effective_key(reg.get("zai")) == FAKE_KEY
+    with pytest.raises(RegistryError, match="joesacct1"):
+        reg.remove_account("zai", "joesacct1")
+
+
+def test_accounts_round_trip_through_v2_registry(tmp_path):
+    """Accounts and the selection survive save/load; the file is schema v2."""
+    path = tmp_path / "registry.json"
+    reg = Registry(path)
+    reg.add(sub())
+    reg.add_account("zai", "joesacct1", ALT_KEY)
+    reg.select_account("zai", "joesacct1")
+    reg.save()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["version"] == 2
+    assert data["subscriptions"][0]["accounts"][0]["name"] == "joesacct1"
+    assert data["subscriptions"][0]["selected_account"] == "joesacct1"
+
+    reloaded = Registry.load(path)
+    stored = reloaded.get("zai")
+    assert stored.accounts == [Account(name="joesacct1", key=ALT_KEY)]
+    assert effective_key(stored) == ALT_KEY
+
+
+def test_load_legacy_v1_registry_without_accounts(tmp_path):
+    """A pre-accounts registry (version 1) loads as primary-key-only."""
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "subscriptions": [
+                    {
+                        "provider": "zai",
+                        "auth_method": "api_key",
+                        "key": FAKE_KEY,
+                        "models": [],
+                        "default_model": None,
+                        "added_at": ADDED_AT,
+                        "status": "active",
+                        "notes": "",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    reg = Registry.load(path)
+    stored = reg.get("zai")
+    assert stored.accounts == []
+    assert effective_key(stored) == FAKE_KEY
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"accounts": [Account(name="a", key=ALT_KEY), Account(name="a", key=ALT_KEY)]},
+        {"accounts": [Account(name="original", key=ALT_KEY)]},
+        {"accounts": [Account(name="a", key="")]},
+        {"selected_account": "ghost"},
+        {"auth_method": "none", "key": None, "accounts": [Account(name="a", key=ALT_KEY)]},
+    ],
+)
+def test_add_rejects_invalid_account_payload(tmp_path, overrides):
+    """Subscription validation covers nested account invariants."""
+    reg = Registry(tmp_path / "registry.json")
+    with pytest.raises(RegistryError):
+        reg.add(sub(**overrides))

@@ -19,17 +19,26 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "subscriptions": [
     {
-      "provider": "zai",
+      "provider": "commandcode",
       "auth_method": "api_key",
-      "key": "069b...",
-      "models": ["glm-4.7", "glm-5.3-flash"],
-      "default_model": "glm-5.3-flash",
+      "key": "user_primary...",
+      "models": ["deepseek/deepseek-v4.1-flash"],
+      "default_model": "deepseek/deepseek-v4.1-flash",
       "added_at": "2026-10-10T12:00:00+00:00",
       "status": "active",
-      "notes": ""
+      "notes": "",
+      "accounts": [
+        {
+          "name": "joesacct1",
+          "key": "user_alt...",
+          "added_at": "2026-11-08T12:00:00+00:00",
+          "notes": ""
+        }
+      ],
+      "selected_account": "joesacct1"
     }
   ]
 }
@@ -37,8 +46,16 @@ the live machine (Windows, `C:/Users/ggurov/.omp`) on 2026-10-10.
 
 - `provider` must exist in the catalog (providers.py) — enforced at `add()`.
 - `status` ∈ {`active`, `expired`, `disabled`}; `auth_method` ∈ {`api_key`,
-  `oauth`}; unknown values raise `RegistryError`.
+  `oauth`, `none`}; unknown values raise `RegistryError`.
 - `default_model`, when set, must be in `models` (add-time validation).
+- `accounts` holds alternate keys for the same provider (another billing
+  account); labels are unique, nonblank, and must not be the reserved
+  `original`. Accounts are api_key-only. `selected_account` names the account
+  whose key `mar export`, `mar omp-sync`, `mar limits`, and `mar serve` use;
+  empty/`original` means the subscription's own `key`. The primary key is
+  never overwritten by account selection.
+- `version: 1` registries (no accounts) still load; the next save writes
+  version 2.
 - Writes are atomic (temp file + `os.replace`); `0o600` best-effort; on Windows
   chmod is a no-op — documented, not faked.
 

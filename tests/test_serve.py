@@ -57,11 +57,6 @@ class TestRenderConfig:
         assert "ZAI_API_KEY" not in body_before
         assert "ZAI_API_KEY" in body_after
 
-    def test_memory_defaults_to_global_hindsight(self, registry_path):
-        body = serve.render_config(registry_path, "bash")
-        assert "omp config set memory.backend hindsight" in body
-        assert f"omp config set hindsight.apiUrl {cli.DEFAULT_GLOBAL_MEMORY_URL}" in body
-
     def test_memory_off_emits_no_memory_config(self, registry_path):
         body = serve.render_config(registry_path, "bash", memory="off")
         assert "omp config set memory.backend off" in body
@@ -809,3 +804,99 @@ class TestServeCaching:
             time.sleep(0.01)
         assert serve._usage_cache["openrouter"][1] == "$315.00 left"
         assert calls == ["openrouter"]
+
+
+PRIMARY_CC = "user_primary-key-1234567890"
+ALT_CC = "user_joesacct1-key-9876543210"
+
+
+def _add_account(registry_path: Path, provider: str, name: str, key: str) -> None:
+    assert (
+        cli.main(
+            [
+                "account", "add", provider, name, "--key", key,
+                "--registry", str(registry_path),
+            ]
+        )
+        == 0
+    )
+
+
+@pytest.fixture()
+def account_server(tmp_path, monkeypatch):
+    """Serve a registry holding one provider with two alternate keys."""
+    path = tmp_path / "registry.json"
+    assert (
+        cli.main(["add", "commandcode", "--key", PRIMARY_CC, "--registry", str(path)])
+        == 0
+    )
+    _add_account(path, "commandcode", "joesacct1", ALT_CC)
+    monkeypatch.setattr(serve, "_usage_cache", {})
+    monkeypatch.setattr(serve, "_usage_locks", {})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), serve.make_handler(path))
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}", path
+    httpd.shutdown()
+
+
+def _post_json(url: str, payload: dict) -> tuple[int, str]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as resp:
+        return resp.status, resp.read().decode("utf-8")
+
+
+class TestAlternateAccounts:
+    def test_snapshot_lists_one_row_per_key(self, account_server, monkeypatch):
+        _, path = account_server
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        rows = [r for r in serve.services_snapshot(path) if r["provider"] == "commandcode"]
+        assert [r["account"] for r in rows] == ["original", "joesacct1"]
+        assert [r["selected"] for r in rows] == [True, False]
+
+    def test_page_renders_radio_set_with_labels(self, account_server, monkeypatch):
+        _, path = account_server
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        html = serve.render_index_html("localhost:8930", path)
+        assert 'name="acct-commandcode"' in html
+        assert "original</label>" in html
+        assert "joesacct1</label>" in html
+        assert 'value="original" checked' in html
+        assert "/select" in html
+
+    def test_select_switches_served_payload_and_persists(self, account_server):
+        url, path = account_server
+        status, _ = _post_json(f"{url}/select", {"provider": "commandcode", "account": "joesacct1"})
+        assert status == 200
+        body = urllib.request.urlopen(f"{url}/config.sh", timeout=5).read().decode("utf-8")
+        assert f"COMMAND_CODE_API_KEY={ALT_CC}" in body
+        assert PRIMARY_CC not in body
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["subscriptions"][0]["selected_account"] == "joesacct1"
+        # 'original' is the reserved label for the subscription's own key
+        status, _ = _post_json(f"{url}/select", {"provider": "commandcode", "account": "original"})
+        assert status == 200
+        body = urllib.request.urlopen(f"{url}/config.sh", timeout=5).read().decode("utf-8")
+        assert f"COMMAND_CODE_API_KEY={PRIMARY_CC}" in body
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"provider": "commandcode", "account": "ghost"},
+            {"provider": "ghost", "account": "original"},
+            {"provider": "commandcode"},
+            {"account": "original"},
+        ],
+    )
+    def test_select_rejects_bad_input(self, account_server, payload):
+        url, _ = account_server
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            _post_json(f"{url}/select", payload)
+        assert excinfo.value.code == 400

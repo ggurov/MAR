@@ -123,7 +123,7 @@ def make_store() -> VaultStore:
 def payload(*subs: Subscription) -> dict:
     from dataclasses import asdict
 
-    return {"version": 1, "subscriptions": [asdict(s) for s in subs]}
+    return {"version": 2, "subscriptions": [asdict(s) for s in subs]}
 
 
 # --- write/read round trip ----------------------------------------------------
@@ -142,7 +142,7 @@ def test_write_puts_key_and_metadata_fields(fake):
     assert fields["models"] == ["glm-4.7"]
     assert "updated_at" in fields and "rotated_by" in fields
     meta = fake.secrets["mar/keys/_registry"]
-    assert meta["version"] == 1
+    assert meta["version"] == 2
 
 
 def test_read_missing_vault_is_none(fake):
@@ -170,7 +170,7 @@ def test_round_trip_preserves_every_subscription_field(fake):
         addr="http://127.0.0.1:8200", token=TOKEN, mount="secret", path="mar/keys"
     ).read()
     assert raw is not None
-    assert raw["version"] == 1
+    assert raw["version"] == 2
     by_provider = {e["provider"]: e for e in raw["subscriptions"]}
     assert by_provider["zai"]["key"] == FAKE_KEY
     assert by_provider["claude"]["auth_method"] == "oauth"

@@ -199,10 +199,29 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt credentials from the local omp install (`agent.db` OAuth logins + `.env` keys) into the registry |
 | `mar export [--shell bash] [--memory on\|off] [--memory-url URL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--memory off` writes `memory.backend off` |
-| `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request — ops (Windows task, auto-restart, logs, re-register): [docs/serve-operations.md](docs/serve-operations.md) |
+| `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services/quotas/renewals, per-provider key radios, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request — ops (Windows task, auto-restart, logs, re-register): [docs/serve-operations.md](docs/serve-operations.md) |
 | `mar prompt` | Startup prompt for a fresh omp session |
-| `mar rotate <provider> --key-stdin` | Replace one provider's key in place — models, default model, and notes are preserved |
+| `mar account add <provider> <name> --key-stdin` | Add an alternate key for the same provider (another account); the primary key stays stored |
+| `mar account select <provider> <name\|original>` | Choose which key `mar export`/`omp-sync`/`limits`/`serve` serve |
+| `mar account remove <provider> <name>` | Delete an alternate key (selection falls back to `original`) |
+| `mar rotate <provider> --key-stdin` | Replace the provider's primary key in place — models, defaults, notes, and alternate accounts are preserved |
 | `mar config [show\|backend]` | Show or switch the storage backend (file by default; optional Vault) |
+
+### Two keys for one provider (shared/alternate accounts)
+
+Both keys stay valid; only the selected one is served:
+
+```sh
+mar account add commandcode joesacct1 --key-stdin   # keep the existing key as "original"
+mar account select commandcode joesacct1           # export/sync/serve now emit Joe's key
+mar account select commandcode original            # back to your own account
+```
+
+`mar serve` shows one row per key with a radio button, so the switch is one
+click on the web page: the payloads (`/config.sh`, `/config.ps1`) and
+`mar export` output change immediately. A running omp session caches `.env` at
+startup — restart it (or re-apply the payload) after switching. Selections
+and alternate keys live in the registry (schema v2; v1 files load unchanged).
 
 ## Where keys live (and don't)
 

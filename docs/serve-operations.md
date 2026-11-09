@@ -11,6 +11,11 @@ rights required anywhere.
 - Usage data is cached (60 s for provider fetches, 300 s for `omp usage`) and
   refreshed in the background; stale data is served immediately, so the page
   stays responsive even when a provider API or `omp usage` is slow.
+- Providers with alternate keys (``mar account add``) get one table row per
+  key and a radio button. Clicking a radio POSTs ``/select``; the server
+  validates the label, writes ``selected_account`` to the registry, and
+  reloads. ``/config.sh`` / ``/config.ps1`` then serve that key. Running omp
+  sessions cache ``.env`` at startup, so restart them after switching.
 - Windows Firewall rule `MAR config server`: TCP 8930 inbound, **LocalSubnet
   only**, Private+Domain profiles (created once with elevation; the rule itself
   never needs admin again).

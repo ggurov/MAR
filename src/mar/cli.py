@@ -197,6 +197,43 @@ def _build_parser() -> argparse.ArgumentParser:
     _backend_flag(p_rot)
     p_rot.set_defaults(func=_cmd_rotate)
 
+    p_acct = sub.add_parser(
+        "account",
+        help="manage alternate keys for one provider (same provider, different account)",
+    )
+    acct_sub = p_acct.add_subparsers(dest="account_command", required=True, metavar="action")
+
+    p_acct_add = acct_sub.add_parser("add", help="add an alternate key under a provider")
+    p_acct_add.add_argument("provider", choices=PROVIDER_IDS)
+    p_acct_add.add_argument("name", help="label used by the serve radio set, e.g. joesacct1")
+    p_acct_add.add_argument(
+        "--key", default=None, help="API key (prefer --key-stdin to keep it out of shell history)"
+    )
+    p_acct_add.add_argument(
+        "--key-stdin", action="store_true", help="read the API key from one stdin line"
+    )
+    p_acct_add.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_acct_add)
+    p_acct_add.set_defaults(func=_cmd_account_add)
+
+    p_acct_sel = acct_sub.add_parser(
+        "select", help="choose which key mar export/omp-sync serve for a provider"
+    )
+    p_acct_sel.add_argument("provider", choices=PROVIDER_IDS)
+    p_acct_sel.add_argument(
+        "name", help="account label, or 'original' for the provider's own key"
+    )
+    p_acct_sel.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_acct_sel)
+    p_acct_sel.set_defaults(func=_cmd_account_select)
+
+    p_acct_rm = acct_sub.add_parser("remove", help="delete an alternate key")
+    p_acct_rm.add_argument("provider", choices=PROVIDER_IDS)
+    p_acct_rm.add_argument("name")
+    p_acct_rm.add_argument("--registry", default=None, metavar="PATH")
+    _backend_flag(p_acct_rm)
+    p_acct_rm.set_defaults(func=_cmd_account_remove)
+
     p_cfg = sub.add_parser("config", help="show or change storage settings")
     cfg_sub = p_cfg.add_subparsers(dest="config_command", required=True, metavar="action")
 
@@ -324,6 +361,15 @@ def _cmd_list(args: argparse.Namespace) -> int:
                 "auth_method": s.auth_method,
                 "default_model": s.default_model,
                 "key": registry.mask(s.key),
+                "selected_account": s.selected_account or registry.PRIMARY_ACCOUNT,
+                "accounts": [
+                    {
+                        "name": a.name,
+                        "key": registry.mask(a.key),
+                        "selected": s.selected_account == a.name,
+                    }
+                    for a in s.accounts
+                ],
             }
             for s in subs
         ]
@@ -334,9 +380,15 @@ def _cmd_list(args: argparse.Namespace) -> int:
         return 0
     for s in subs:
         default = s.default_model or "-"
+        selected = s.selected_account or registry.PRIMARY_ACCOUNT
+        suffix = f" account={selected}" if s.accounts or s.selected_account else ""
         print(
-            f"{s.provider:<14} {s.status:<9} {s.auth_method:<8} default={default:<20} key={registry.mask(s.key)}"
+            f"{s.provider:<14} {s.status:<9} {s.auth_method:<8} "
+            f"default={default:<20} key={registry.mask(s.key)}{suffix}"
         )
+        for account in s.accounts:
+            mark = "*" if s.selected_account == account.name else " "
+            print(f"    {mark} {account.name:<14} key={registry.mask(account.key)}")
     return 0
 
 
@@ -352,7 +404,7 @@ def _cmd_limits(args: argparse.Namespace) -> int:
         except KeyError:
             sub = None
         if pid in limits.supported():
-            key = sub.key if sub is not None else None
+            key = registry.effective_key(sub) if sub is not None else None
             keyless = bool(providers.get(pid).base_url)
             if not key and not keyless:
                 print(
@@ -440,10 +492,16 @@ def _cmd_export(args: argparse.Namespace) -> int:
     # Endpoint vars are addresses, not secrets: they stay readable under --redact.
     url_vars: set[str] = set()
     skipped: list[str] = []
+    account_notes: list[str] = []
     oauth_used = False
     oauth_expiries: list[tuple[str, int]] = []
     declared: dict[str, dict[str, object]] = {}
     for sub in reg.active():
+        if sub.selected_account:
+            account_notes.append(
+                f"{sub.provider}: serving account {sub.selected_account!r} "
+                f"(mar account select {sub.provider} original to switch back)"
+            )
         try:
             provider = providers.get(sub.provider)
         except KeyError:
@@ -497,7 +555,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
                 f"run /login {provider.omp_provider_id} there"
             )
             continue
-        pairs.append((provider.export_env_var, sub.key))
+        pairs.append((provider.export_env_var, registry.effective_key(sub)))
     if not pairs:
         return _err("nothing to export: no active subscriptions with exportable api keys")
     redact = getattr(args, "redact", False)
@@ -508,6 +566,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     notes = [
         f"exported {len(pairs)} line(s) ({args.shell}); then run: omp usage / omp --yolo"
     ]
+    notes.extend(account_notes)
     endpoints = [var for var, _ in pairs if var in url_vars]
     if endpoints:
         notes.append(
@@ -837,6 +896,8 @@ def _cmd_pull(args: argparse.Namespace) -> int:
                 status=old.status if old else "active",
                 notes=notes,
                 expires_at_ms=expires_ms,
+                accounts=old.accounts if old else [],
+                selected_account=old.selected_account if old else "",
             )
         )
         pulled += 1
@@ -914,6 +975,41 @@ def _cmd_rotate(args: argparse.Namespace) -> int:
     reg.rotate(args.provider, key)
     reg.save()
     print(f"rotated {args.provider} (key: {registry.mask(key)})")
+    return 0
+
+
+def _cmd_account_add(args: argparse.Namespace) -> int:
+    """Add an alternate key to an existing provider subscription."""
+    key = sys.stdin.readline().strip() if args.key_stdin else args.key
+    if not key:
+        return _err("account add requires --key or --key-stdin")
+    reg = _load(args)
+    reg.add_account(args.provider, args.name, key, added_at=_now())
+    reg.save()
+    print(
+        f"added account {args.name!r} for {args.provider} "
+        f"(key: {registry.mask(key)}); select it with: "
+        f"mar account select {args.provider} {args.name}"
+    )
+    return 0
+
+
+def _cmd_account_select(args: argparse.Namespace) -> int:
+    """Choose which stored key mar serves for a provider."""
+    reg = _load(args)
+    reg.select_account(args.provider, args.name)
+    reg.save()
+    label = args.name or registry.PRIMARY_ACCOUNT
+    print(f"{args.provider}: serving {label}")
+    return 0
+
+
+def _cmd_account_remove(args: argparse.Namespace) -> int:
+    """Delete one alternate key from a provider."""
+    reg = _load(args)
+    reg.remove_account(args.provider, args.name)
+    reg.save()
+    print(f"removed account {args.name!r} from {args.provider}")
     return 0
 
 

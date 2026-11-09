@@ -164,7 +164,6 @@ def test_prompt_second_local_endpoint_uses_lm_studio_ref(tmp_path: Path) -> None
         f"(omp model: lm-studio/{model})"
     ) in prompt
 
-
 # ------------------------------------------------------------------------ sync
 
 
@@ -412,3 +411,18 @@ def test_sync_uses_default_agent_dir_when_omitted(
 
     assert report.written == ("zai",)
     assert (agent_dir / "agent.db").exists()
+
+
+def test_sync_writes_selected_account_key(tmp_path: Path) -> None:
+    """omp-sync follows the registry's account selection, not always the primary."""
+    agent_dir = tmp_path / "agent"
+    reg = _registry(tmp_path, [_sub("commandcode", key="user-primary-1234567890")])
+    reg.add_account("commandcode", "joesacct1", "user-joesacct1-9876543210")
+    reg.select_account("commandcode", "joesacct1")
+    reg.save()
+
+    report = sync(reg, agent_dir=agent_dir)
+
+    assert report.written == ("commandcode",)
+    values = omp.read_env_credentials(agent_dir)
+    assert values["COMMAND_CODE_API_KEY"] == "user-joesacct1-9876543210"
