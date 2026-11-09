@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from mar import cli, limits, providers
+from mar.registry import PRIMARY_ACCOUNT, Registry
 
 REPO_URL = "https://github.com/ggurov/MAR"
 HINDSIGHT_DASHBOARD_URL = "http://hub.nj02.gurov.us:9999/dashboard"
@@ -76,11 +77,22 @@ def render_config(
     return "\n".join(lines).strip("\n")
 
 
-def _provider_usage_lock(provider: str) -> threading.Lock:
-    """Return the per-provider lock guarding one live usage fetch."""
-    with _usage_locks_guard:
-        return _usage_locks.setdefault(provider, threading.Lock())
+def _usage_cache_key(provider: str, account: str) -> str:
+    """Return the cache/lock key for one provider key.
 
+    The primary account keeps the bare provider id so existing cache
+    entries and single-key providers behave exactly as before; alternate
+    accounts get their own suffix.
+    """
+    if account in ("", PRIMARY_ACCOUNT):
+        return provider
+    return f"{provider}:{account}"
+
+
+def _provider_usage_lock(cache_key: str) -> threading.Lock:
+    """Return the per-(provider, account) lock guarding one live usage fetch."""
+    with _usage_locks_guard:
+        return _usage_locks.setdefault(cache_key, threading.Lock())
 
 def _fetch_usage_cell(provider: str, key: str | None) -> str:
     """Fetch one provider's live quota cell.
@@ -97,17 +109,20 @@ def _fetch_usage_cell(provider: str, key: str | None) -> str:
     return snapshot.note or "ok"
 
 
-def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | None:
-    """Refresh one provider's quota cell in the background, single-flight.
+def _refresh_usage_async(
+    provider: str, key: str | None, account: str = PRIMARY_ACCOUNT
+) -> threading.Thread | None:
+    """Refresh one provider key's quota cell in the background, single-flight.
 
     Returns:
         The started thread, or ``None`` when a refresh is already running.
     """
-    lock = _provider_usage_lock(provider)
+    cache_key = _usage_cache_key(provider, account)
+    lock = _provider_usage_lock(cache_key)
     if not lock.acquire(blocking=False):
         return None
     cache = _usage_cache
-    previous = cache.get(provider)
+    previous = cache.get(cache_key)
 
     def worker() -> None:
         try:
@@ -115,7 +130,7 @@ def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | N
         except Exception:  # noqa: BLE001 — keep the last good cell
             cell = previous[1] if previous is not None else "unavailable"
         finally:
-            cache[provider] = (time.monotonic(), cell)
+            cache[cache_key] = (time.monotonic(), cell)
             lock.release()
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -123,7 +138,9 @@ def _refresh_usage_async(provider: str, key: str | None) -> threading.Thread | N
     return thread
 
 
-def _usage_cell(provider: str, key: str | None) -> str | None:
+def _usage_cell(
+    provider: str, key: str | None, account: str = PRIMARY_ACCOUNT
+) -> str | None:
     """Return the live quota text for one provider, cached and non-blocking.
 
     Every ``limits_kind == "api"`` catalog entry is fetched: OpenRouter
@@ -141,6 +158,8 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
         provider: Catalog id.
         key: The provider credential used for the live fetch (unused by
             keyless endpoints).
+        account: Account label whose quota is shown; alternates are cached
+            separately from the primary key.
 
     Returns:
         Human quota text, e.g. ``"$315.00 left"``; ``None`` when the
@@ -154,14 +173,15 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
         return None
     if entry.limits_kind != "api":
         return None
+    cache_key = _usage_cache_key(provider, account)
     now = time.monotonic()
-    cached = _usage_cache.get(provider)
+    cached = _usage_cache.get(cache_key)
     if cached is not None and now - cached[0] < _USAGE_TTL_SECONDS:
         return cached[1]
     if cached is not None:
-        _refresh_usage_async(provider, key)
+        _refresh_usage_async(provider, key, account)
         return cached[1]
-    lock = _provider_usage_lock(provider)
+    lock = _provider_usage_lock(cache_key)
     if not lock.acquire(blocking=False):
         return None
     try:
@@ -169,7 +189,7 @@ def _usage_cell(provider: str, key: str | None) -> str | None:
     except Exception:  # noqa: BLE001 — a dead usage API must never 500 the page
         cell = "unavailable"
     finally:
-        _usage_cache[provider] = (time.monotonic(), cell)
+        _usage_cache[cache_key] = (time.monotonic(), cell)
         lock.release()
     return cell
 
@@ -367,25 +387,27 @@ def _format_renew(hours: float) -> str:
     return ""
 
 def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
-    """Collect one row per active subscription for the services panel.
+    """Collect one row per active subscription account for the services panel.
 
     Args:
         registry: Path to the MAR registry file (file backend).
 
     Returns:
-        One dict per active subscription with keys ``provider``,
-        ``auth``, ``usage`` (quota text from ``omp usage`` windows —
-        each window carries its own ``resets in X`` countdown — else the
-        live fetch for any ``limits_kind == "api"`` catalog entry, which
-        for a self-hosted endpoint reports its loaded model; ``None`` when
-        a provider reports neither), ``renew`` (oauth token expiry only:
+        One dict per active subscription KEY (primary first, then each
+        alternate account) with keys ``provider``, ``account`` (label;
+        ``"original"`` for the subscription's own key), ``selected`` (bool,
+        the key ``mar export``/``omp-sync`` currently serve), ``auth``,
+        ``usage`` (quota text from ``omp usage`` windows — each window
+        carries its own ``resets in X`` countdown — else the live fetch for
+        any ``limits_kind == "api"`` catalog entry with that account's key;
+        ``None`` when neither reports), ``renew`` (oauth token expiry only:
         ``in 7.9h`` under 48 hours, ``in ~N days`` under a year, ``""``
         for longer-lived tokens, ``EXPIRED`` once past; empty string when
         nothing expires), ``limits_url``, and ``endpoint`` (the catalog
         ``base_url`` for a self-hosted entry, else ``""``).
     """
     rows: list[dict[str, str | None]] = []
-    reg = cli.registry.Registry.load(registry)
+    reg = Registry.load(registry)
     id_map = _omp_id_map()
     usage_map = _omp_usage()
     for sub in reg.active():
@@ -395,24 +417,32 @@ def services_snapshot(registry: Path) -> list[dict[str, str | None]]:
             entry = None
         limits_url = entry.limits_url if entry else ""
         omp_limits = usage_map.get(id_map.get(sub.provider, ""), [])
-        quota, _ = _format_limits(omp_limits)
-        if quota is None:
-            quota = _usage_cell(sub.provider, sub.key)
+        omp_quota, _ = _format_limits(omp_limits)
         if sub.auth_method == "oauth" and sub.expires_at_ms:
             hours = (sub.expires_at_ms / 1000 - time.time()) / 3600
             renew = _format_renew(hours)
         else:
             renew = ""
-        rows.append(
-            {
-                "provider": sub.provider,
-                "auth": sub.auth_method,
-                "usage": quota,
-                "renew": renew,
-                "limits_url": limits_url,
-                "endpoint": entry.base_url if entry else "",
-            }
-        )
+        selected_label = sub.selected_account or PRIMARY_ACCOUNT
+        keys = [(PRIMARY_ACCOUNT, sub.key)]
+        keys.extend((account.name, account.key) for account in sub.accounts)
+        for label, key in keys:
+            selected = label == selected_label
+            quota = omp_quota if selected else None
+            if quota is None:
+                quota = _usage_cell(sub.provider, key, account=label)
+            rows.append(
+                {
+                    "provider": sub.provider,
+                    "account": label,
+                    "selected": selected,
+                    "auth": sub.auth_method,
+                    "usage": quota,
+                    "renew": renew,
+                    "limits_url": limits_url,
+                    "endpoint": entry.base_url if entry else "",
+                }
+            )
     return rows
 
 
@@ -437,7 +467,11 @@ def render_index_html(host: str, registry: Path) -> str:
         ' rel="noopener">Open Hindsight dashboard</a>'
     )
     rows_html: list[str] = []
-    for row in services_snapshot(registry):
+    snapshot = services_snapshot(registry)
+    key_counts: dict[str, int] = {}
+    for row in snapshot:
+        key_counts[row["provider"]] = key_counts.get(row["provider"], 0) + 1
+    for row in snapshot:
         usage = html_mod.escape(row["usage"]) if row["usage"] is not None else ""
         name = html_mod.escape(row["provider"])
         link = row["limits_url"] or row["endpoint"]
@@ -451,11 +485,25 @@ def render_index_html(host: str, registry: Path) -> str:
         renew = html_mod.escape(row["renew"])
         if "EXPIRED" in renew:
             renew = f'<span class="expired">{renew}</span>'
+        account = html_mod.escape(row["account"])
+        if key_counts[row["provider"]] > 1:
+            checked = " checked" if row["selected"] else ""
+            provider_arg = html_mod.escape(row["provider"], quote=True)
+            account_arg = html_mod.escape(row["account"], quote=True)
+            key_cell = (
+                f'<label class="acct"><input type="radio" '
+                f'name="acct-{provider_arg}" value="{account_arg}"{checked} '
+                f"onchange=\"selectAccount('{provider_arg}','{account_arg}',this)\"> "
+                f"{account}</label>"
+            )
+        else:
+            key_cell = account
         rows_html.append(
             f"<tr><td>{provider}</td>"
             f"<td>{row['auth']}</td>"
             f"<td class=\"mono\">{usage}</td>"
-            f"<td>{renew}</td></tr>"
+            f"<td>{renew}</td>"
+            f"<td class=\"keys\">{key_cell}</td></tr>"
         )
     ips = "".join(f"<li><code>{ip}</code></li>" for ip in lan_ips())
     return f"""<!doctype html>
@@ -497,6 +545,8 @@ def render_index_html(host: str, registry: Path) -> str:
   th {{ color:#8b949e; font-weight:600; font-size:12px; text-transform:uppercase;
         letter-spacing:.05em; }}
   td.mono {{ font-family:ui-monospace,Consolas,monospace; }}
+  td.keys {{ white-space:nowrap; }}
+  label.acct {{ display:flex; gap:6px; align-items:center; cursor:pointer; }}
   ul {{ margin:6px 0 0; padding-left:18px; color:#8b949e; font-size:13px; }}
   footer {{ margin-top:20px; font-size:13px; color:#8b949e; }}
 </style>
@@ -539,11 +589,16 @@ def render_index_html(host: str, registry: Path) -> str:
   <div class="card">
     <h2>Services</h2>
     <table>
-      <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th></tr>
+      <tr><th>Provider</th><th>Auth</th><th>Quota</th><th>Renews</th><th>Key</th></tr>
       {''.join(rows_html)}
     </table>
     <p class="note"><span class="warn">⚠ Plain HTTP</span> — payloads carry live credentials.
        LAN only; the firewall rule scopes this port to LocalSubnet.</p>
+    <p class="note">Key radios switch which account <code>mar export</code>,
+       <code>/config.sh</code>, <code>/config.ps1</code>, and <code>mar omp-sync</code>
+       serve for that provider; the switch is written to the registry immediately.
+       A running omp session caches <code>.env</code> at startup — restart it (or re-apply
+       the payload) after switching.</p>
     <p class="note">oauth renews by re-login — <code>omp login &lt;provider&gt;</code> on the
        box (omp stores the fresh token), then <code>mar pull</code> adopts it here. Don't
        switch to API keys: API billing is a separate tier from your subscription quota.</p>
@@ -584,9 +639,25 @@ function refreshCommands() {{
 }}
 document.getElementById('global-memory').addEventListener('change', refreshCommands);
 refreshCommands();
+
+async function selectAccount(provider, account, el) {{
+  try {{
+    const r = await fetch('/select', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{provider: provider, account: account}})
+    }});
+    if (!r.ok) throw new Error((await r.text()).trim());
+    location.reload();
+  }} catch (e) {{
+    el.checked = !el.checked;
+    alert('MAR: ' + e.message);
+  }}
+}}
 </script>
 </body>
 </html>
+
 """
 
 
@@ -662,6 +733,54 @@ def make_handler(registry: Path, backend: str | None = None) -> type[BaseHTTPReq
                 )
             else:
                 self._send(404, "not found\n", "text/plain; charset=utf-8")
+
+        def do_POST(self) -> None:  # stdlib naming convention
+            parsed = urllib.parse.urlsplit(self.path)
+            if parsed.path != "/select":
+                self._send(404, "not found\n", "text/plain; charset=utf-8")
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0 or length > 65_536:
+                self._send(400, "invalid request body\n", "text/plain; charset=utf-8")
+                return
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send(400, "invalid JSON body\n", "text/plain; charset=utf-8")
+                return
+            provider = payload.get("provider") if isinstance(payload, dict) else None
+            account = payload.get("account") if isinstance(payload, dict) else None
+            if (
+                not isinstance(provider, str)
+                or not provider
+                or not isinstance(account, str)
+                or not account
+            ):
+                self._send(
+                    400,
+                    "provider and account are required strings\n",
+                    "text/plain; charset=utf-8",
+                )
+                return
+            try:
+                reg = (
+                    Registry.load(None, backend=backend)
+                    if backend
+                    else Registry.load(registry)
+                )
+                reg.select_account(provider, account)
+                reg.save()
+            except (cli.registry.RegistryError, OSError) as exc:
+                self._send(400, f"{exc}\n", "text/plain; charset=utf-8")
+                return
+            self._send(
+                200,
+                json.dumps({"provider": provider, "account": account}) + "\n",
+                "application/json; charset=utf-8",
+            )
 
         def log_message(self, format: str, *args: object) -> None:
             """Quiet default per-request logging to keep the console clean."""

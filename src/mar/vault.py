@@ -42,7 +42,8 @@ __all__ = ["VaultError", "VaultStore", "VaultUnreachable"]
 _open = urllib.request.urlopen  # module-level injectable; tests monkeypatch vault._open
 
 _REGISTRY_META = "_registry"
-_REGISTRY_VERSION = 1  # mirror of registry.SCHEMA_VERSION; registry.load re-validates
+_REGISTRY_VERSION = 2  # mirror of registry.SCHEMA_VERSION; registry.load re-validates
+_LEGACY_REGISTRY_VERSIONS = frozenset({1})
 _METADATA_FIELDS = ("updated_at", "rotated_by")
 _DEFAULT_TIMEOUT = 10.0
 
@@ -126,10 +127,11 @@ class VaultStore:
         if meta is None:
             return None
         version = meta.get("version")
-        if version != _REGISTRY_VERSION:
+        if version != _REGISTRY_VERSION and version not in _LEGACY_REGISTRY_VERSIONS:
             raise VaultError(
                 f"vault registry at {self.mount}/{self.path} has unknown "
-                f"version {version!r}; expected {_REGISTRY_VERSION}"
+                f"version {version!r}; expected {_REGISTRY_VERSION} "
+                f"(or legacy {sorted(_LEGACY_REGISTRY_VERSIONS)})"
             )
         subscriptions: list[dict] = []
         for key in self._list():

@@ -32,7 +32,7 @@ class TestAdd:
     def test_add_persists_subscription_and_masks_key(self, reg_path, capsys):
         assert add_zai(reg_path) == 0
         data = json.loads(reg_path.read_text(encoding="utf-8"))
-        assert data["version"] == 1
+        assert data["version"] == 2
         assert data["subscriptions"][0]["provider"] == "zai"
         out = capsys.readouterr().out
         assert FAKE_KEY not in out
@@ -1057,3 +1057,77 @@ class TestConfig:
         monkeypatch.delenv("VAULT_TOKEN_FILE", raising=False)
         assert cli.main(["config", "backend", "vault"]) == 1
         assert "addr" in capsys.readouterr().err
+
+
+class TestAccounts:
+    """Alternate per-provider keys: add, select, and export the chosen one."""
+
+    PRIMARY = "user_primary-key-1234567890"
+    ALT = "user_joesacct1-key-9876543210"
+
+    def _seed(self, reg_path, capsys):
+        assert run(reg_path, "add", "commandcode", "--key", self.PRIMARY) == 0
+        assert (
+            run(reg_path, "account", "add", "commandcode", "joesacct1", "--key", self.ALT)
+            == 0
+        )
+        capsys.readouterr()
+
+    def test_export_serves_primary_until_switched(self, reg_path, capsys):
+        self._seed(reg_path, capsys)
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        out = capsys.readouterr().out
+        assert f"COMMAND_CODE_API_KEY={self.PRIMARY}" in out
+        assert self.ALT not in out
+
+    def test_export_serves_selected_account(self, reg_path, capsys):
+        self._seed(reg_path, capsys)
+        assert run(reg_path, "account", "select", "commandcode", "joesacct1") == 0
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        out = capsys.readouterr().out
+        assert f"COMMAND_CODE_API_KEY={self.ALT}" in out
+        assert self.PRIMARY not in out
+        # switching back restores the primary key
+        assert run(reg_path, "account", "select", "commandcode", "original") == 0
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        assert f"COMMAND_CODE_API_KEY={self.PRIMARY}" in capsys.readouterr().out
+
+    def test_account_add_reads_key_from_stdin(self, reg_path, monkeypatch, capsys):
+        assert run(reg_path, "add", "commandcode", "--key", self.PRIMARY) == 0
+        monkeypatch.setattr("sys.stdin", io.StringIO(self.ALT + "\n"))
+        assert run(reg_path, "account", "add", "commandcode", "joesacct1", "--key-stdin") == 0
+        capsys.readouterr()
+        assert run(reg_path, "account", "select", "commandcode", "joesacct1") == 0
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        assert f"COMMAND_CODE_API_KEY={self.ALT}" in capsys.readouterr().out
+
+    def test_account_add_requires_a_key(self, reg_path):
+        assert run(reg_path, "add", "commandcode", "--key", self.PRIMARY) == 0
+        assert run(reg_path, "account", "add", "commandcode", "joesacct1") == 1
+
+    def test_account_add_duplicate_is_error(self, reg_path):
+        assert run(reg_path, "add", "commandcode", "--key", self.PRIMARY) == 0
+        assert run(reg_path, "account", "add", "commandcode", "joe", "--key", self.ALT) == 0
+        assert run(reg_path, "account", "add", "commandcode", "joe", "--key", self.ALT) == 1
+
+    def test_account_list_shows_labels_and_masks(self, reg_path, capsys):
+        self._seed(reg_path, capsys)
+        assert run(reg_path, "list") == 0
+        out = capsys.readouterr().out
+        assert "joesacct1" in out
+        assert self.ALT not in out
+        assert self.PRIMARY[:8] not in out or "..." in out
+        assert run(reg_path, "list", "--json") == 0
+        rows = json.loads(capsys.readouterr().out)
+        account = rows[0]["accounts"][0]
+        assert account["name"] == "joesacct1"
+        assert account["selected"] is False
+        assert self.ALT not in json.dumps(rows)
+
+    def test_account_remove(self, reg_path, capsys):
+        self._seed(reg_path, capsys)
+        assert run(reg_path, "account", "remove", "commandcode", "joesacct1") == 0
+        capsys.readouterr()
+        assert run(reg_path, "list", "--json") == 0
+        assert json.loads(capsys.readouterr().out)[0]["accounts"] == []
+        assert run(reg_path, "account", "remove", "commandcode", "joesacct1") == 1
