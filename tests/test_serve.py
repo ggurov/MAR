@@ -568,7 +568,7 @@ class TestIndexHtml:
         )
         html = serve.render_index_html("localhost:8930", registry_path)
         assert "<!doctype html>" in html.lower()
-        assert "http://localhost:8930/config.sh?memory=on | sh" in html
+        assert "curl -fsSL 'http://localhost:8930/config.sh?memory=on' | sh" in html
         assert 'id="global-memory"' in html
         assert "configure global memory" in html
         assert (
@@ -690,7 +690,7 @@ class TestHttpServer:
         assert "<!doctype html>" in body.lower()
         assert "text/html" in self._content_type(f"{server}/")
         host = server.split("//")[1]
-        assert f"http://{host}/config.sh?memory=on | sh" in body
+        assert f"curl -fsSL 'http://{host}/config.sh?memory=on' | sh" in body
         assert 'id="global-memory"' in body
         assert "github.com/ggurov/MAR" in body
         assert "navigator.clipboard" in body  # secure-context copy path
@@ -995,6 +995,27 @@ class TestPerAccountUsage:
         after = [r for r in serve.services_snapshot(path) if r["provider"] == "commandcode"]
         assert [r["usage"] for r in after] == before
         assert [r["selected"] for r in after] == [False, True]
+
+
+class TestQuotedCommands:
+    def test_apply_commands_quote_the_url(self, account_server, monkeypatch):
+        """`&` is a shell operator in bash and PowerShell; the URL must be quoted."""
+        _, path = account_server
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        html = serve.render_index_html("localhost:8930", path)
+        assert (
+            "curl -fsSL 'http://localhost:8930/config.sh?memory=on"
+            "&amp;accounts=commandcode=original' | sh" in html
+        )
+        assert (
+            "irm 'http://localhost:8930/config.ps1?memory=on"
+            "&amp;accounts=commandcode=original' | iex" in html
+        )
+        # The JS rebuild path quotes too (textContent shows raw `&`).
+        assert "\"irm '\" + psUrl + \"' | iex\"" in html
+        assert "\"curl -fsSL '\" + shUrl + \"' | sh\"" in html
 
 
 class TestUsageBars:
