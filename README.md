@@ -222,7 +222,8 @@ usage — inline progress bars filled by consumed quota, with the exact
 credits/dollars on hover — so the switch is one click (commandcode windows and
 monthly allowance are fetched per key; the monthly total is derived from the
 rolling caps). The page's apply commands carry the choice explicitly, e.g.
-`curl -fsSL http://host/config.sh?memory=on&accounts=commandcode=joesacct1 | sh`;
+`curl -fsSL 'http://host/config.sh?memory=on&accounts=commandcode=joesacct1' | sh`
+(PowerShell: `irm 'http://host/config.ps1?memory=on&accounts=commandcode=joesacct1' | iex`);
 the `?accounts=` query pins the served key for that payload without changing
 the saved selection. Re-copy the command after flipping. A running omp session
 caches `.env` at startup — restart it (or re-apply the payload) after

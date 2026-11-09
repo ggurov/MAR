@@ -746,10 +746,12 @@ def render_index_html(host: str, registry: Path) -> str:
     ]
     accounts_query = "&accounts=" + ",".join(picked) if picked else ""
     sh_cmd = html_mod.escape(
-        f"curl -fsSL http://{host}/config.sh?memory=on{accounts_query} | sh"
+        f"curl -fsSL 'http://{host}/config.sh?memory=on{accounts_query}' | sh",
+        quote=False,
     )
     ps_cmd = html_mod.escape(
-        f"irm http://{host}/config.ps1?memory=on{accounts_query} | iex"
+        f"irm 'http://{host}/config.ps1?memory=on{accounts_query}' | iex",
+        quote=False,
     )
     for row in snapshot:
         usage = _render_meters(row.get("meters") or (), row["usage"])
@@ -932,10 +934,10 @@ function accountsParam() {{
 }}
 function refreshCommands() {{
   const HOST = "{host}";
-  document.getElementById('sh-cmd').textContent =
-    'curl -fsSL http://' + HOST + '/config.sh?memory=' + memParam() + accountsParam() + ' | sh';
-  document.getElementById('ps-cmd').textContent =
-    'irm http://' + HOST + '/config.ps1?memory=' + memParam() + accountsParam() + ' | iex';
+  const shUrl = 'http://' + HOST + '/config.sh?memory=' + memParam() + accountsParam();
+  const psUrl = 'http://' + HOST + '/config.ps1?memory=' + memParam() + accountsParam();
+  document.getElementById('sh-cmd').textContent = "curl -fsSL '" + shUrl + "' | sh";
+  document.getElementById('ps-cmd').textContent = "irm '" + psUrl + "' | iex";
 }}
 document.getElementById('global-memory').addEventListener('change', refreshCommands);
 refreshCommands();
