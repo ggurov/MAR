@@ -243,6 +243,8 @@ class TestServicesSnapshot:
         )
         rows = {r["provider"]: r for r in serve.services_snapshot(registry_path)}
         assert rows["opencode"]["usage"] == "5h resets in 2.0h"  # reset-only window
+        assert rows["opencode"]["meters"][0]["reset"] == "resets in 2.0h"
+        assert rows["opencode"]["meters"][0]["percent"] is None
         assert rows["opencode"]["renew"] == ""  # api keys never renew
 
     def test_every_window_carries_its_own_reset_timeline(self, registry_path, monkeypatch):
@@ -593,6 +595,8 @@ class TestIndexHtml:
         assert "re-login:" not in html  # re-login hint removed from renew cell
         assert "omp /login" not in html  # old generic hint is gone
         assert "mar pull" in html  # renewal-flow note under the table
+        assert 'class="bar"' in html  # omp windows render as bars
+        assert "10% used" in html  # 90% remaining -> 10% used bar
 
     def test_page_links_self_hosted_endpoint_when_no_usage_page_exists(
         self, registry_path, monkeypatch
@@ -833,6 +837,17 @@ def account_server(tmp_path, monkeypatch):
     _add_account(path, "commandcode", "joesacct1", ALT_CC)
     monkeypatch.setattr(serve, "_usage_cache", {})
     monkeypatch.setattr(serve, "_usage_locks", {})
+    monkeypatch.setattr(
+        serve.limits,
+        "fetch",
+        lambda provider_id, key, **kwargs: limits.LimitSnapshot(
+            provider=provider_id,
+            fetched_at="2026-11-08T00:00:00+00:00",
+            items=(),
+            source="api",
+            note="mocked",
+        ),
+    )
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), serve.make_handler(path))
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -936,15 +951,18 @@ class TestPerAccountUsage:
             return limits.LimitSnapshot(
                 provider=provider_id,
                 fetched_at="2026-11-08T00:00:00+00:00",
-                items=(limits.LimitItem("5h", used, 14.0, "credits", "5h"),),
+                items=(limits.LimitItem("5-hour", used, 14.0, "credits", "5-hour"),),
                 source="api",
             )
 
         monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
         rows = [r for r in serve.services_snapshot(path) if r["provider"] == "commandcode"]
         assert [r["account"] for r in rows] == ["original", "joesacct1"]
-        assert rows[0]["usage"] == "5h 0/14 cr"
-        assert rows[1]["usage"] == "5h 7.31/14 cr"
+        assert rows[0]["usage"] == "5-hour 0/14 cr"
+        assert rows[1]["usage"] == "5-hour 7.31/14 cr"
+        assert [(m["label"], m["percent"]) for m in rows[0]["meters"]] == [("5-hour", 0)]
+        assert [(m["label"], m["percent"]) for m in rows[1]["meters"]] == [("5-hour", 52)]
+        assert rows[1]["meters"][0]["detail"] == "7.31 / 14 cr"
         assert calls == [("commandcode", PRIMARY_CC), ("commandcode", ALT_CC)]
 
     def test_switching_selection_does_not_move_usage(self, account_server, monkeypatch):
@@ -959,7 +977,7 @@ class TestPerAccountUsage:
             return limits.LimitSnapshot(
                 provider=provider_id,
                 fetched_at="2026-11-08T00:00:00+00:00",
-                items=(limits.LimitItem("5h", used, 14.0, "credits", "5h"),),
+                items=(limits.LimitItem("5-hour", used, 14.0, "credits", "5-hour"),),
                 source="api",
             )
 
@@ -977,6 +995,32 @@ class TestPerAccountUsage:
         after = [r for r in serve.services_snapshot(path) if r["provider"] == "commandcode"]
         assert [r["usage"] for r in after] == before
         assert [r["selected"] for r in after] == [False, True]
+
+
+class TestUsageBars:
+    def test_page_renders_a_bar_per_key_with_percent(self, account_server, monkeypatch):
+        _, path = account_server
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_usage_locks", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+
+        def fake_fetch(provider_id, key, **kwargs):
+            used = 0.0 if key == PRIMARY_CC else 7.0
+            return limits.LimitSnapshot(
+                provider=provider_id,
+                fetched_at="2026-11-08T00:00:00+00:00",
+                items=(limits.LimitItem("5-hour", used, 14.0, "credits", "5-hour"),),
+                source="api",
+            )
+
+        monkeypatch.setattr(serve.limits, "fetch", fake_fetch)
+        html = serve.render_index_html("localhost:8930", path)
+        assert 'class="bar"' in html
+        assert "50% used" in html
+        assert "width:50%" in html
+        assert "7 / 14 cr" in html
+        assert 'class="fill ok"' in html
 
 
 class TestAccountPinnedCommands:

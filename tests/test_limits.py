@@ -449,7 +449,7 @@ def test_commandcode_fetches_balance_and_windows_per_key():
         limits_mod._open = original
 
     assert snap.source == "api"
-    assert [item.name for item in snap.items] == ["5h", "7d", "balance"]
+    assert [item.name for item in snap.items] == ["5-hour", "Weekly", "Balance"]
     five, weekly, balance = snap.items
     assert (five.used, five.limit, five.unit) == (0.0, 14.0, "credits")
     assert five.reset_at_ms == 1794209750036
