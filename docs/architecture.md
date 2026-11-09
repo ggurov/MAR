@@ -87,9 +87,13 @@ in a URL, body, or error message (test-enforced).
 `GET https://api.commandcode.ai/alpha/billing/credits` with the key's bearer
 token (a MAR user-agent is required; the default Python-urllib UA gets 403),
 returning the key's own monthly balance plus 5h/weekly used/cap and reset
-epochs — so alternate keys on one provider show different numbers. Both the
-web page and `mar limits` render bounded values as progress bars (percent used
-plus a filled bar); exact fractions stay in the hover title / detail text.
+epochs — so alternate keys on one provider show different numbers. The
+monthly allowance is not returned directly; the rolling caps are fixed slices
+of it (weekly = half, 5-hour = a fifth), so MAR derives
+`monthly = weekly_cap * 2` (fallback `5h_cap * 5`) and computes usage from
+`monthlyCredits - purchased - free`. Both the web page and `mar limits` render
+bounded values as inline progress bars (percent used plus a filled bar); exact
+fractions stay in the hover title / detail text.
 
 ## omp integration contract
 

@@ -11,9 +11,10 @@ rights required anywhere.
 - Usage data is cached (60 s for provider fetches, 300 s for `omp usage`) and
   refreshed in the background; stale data is served immediately, so the page
   stays responsive even when a provider API or `omp usage` is slow.
-- Quota cells render progress bars filled by consumed quota (percent used,
-  amber past 60%, red past 85%); hover for the exact credits/dollars and the
-  reset countdown. Unbounded balances render as text.
+- Quota cells render inline progress bars (meters side by side) filled by
+  consumed quota (percent used, amber past 60%, red past 85%); hover for the
+  exact credits/dollars and the reset countdown. Unbounded balances render as
+  text.
 - Providers with alternate keys (``mar account add``) get one table row per
   key and a radio button. Clicking a radio POSTs ``/select``; the server
   validates the label, writes ``selected_account`` to the registry, and
