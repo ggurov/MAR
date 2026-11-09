@@ -198,7 +198,7 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | `mar limits [provider]` | Real API checks (OpenRouter credits, Gemini key-liveness, commandcode per-key balance + 5h/weekly windows); exact pointers elsewhere |
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt credentials from the local omp install (`agent.db` OAuth logins + `.env` keys) into the registry |
-| `mar export [--shell bash] [--memory on\|off] [--memory-url URL] [--account PROVIDER=LABEL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--account` pins a key for this run without changing the saved selection; `--memory off` writes `memory.backend off` |
+| `mar export [--shell bash] [--memory on\|off] [--memory-url URL] [--account PROVIDER=LABEL] [--tokenpool URL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--account` pins a key for this run; `--tokenpool` (or `$MAR_TOKENPOOL_URL`) declares the tokenpool omp provider in `models.yml` from its `/v1/models`; `--memory off` writes `memory.backend off` |
 | `mar serve [--port N] [--host ADDR]` | LAN HTTP server: HTML status page (copy-to-clipboard pastables, services table with inline progress-bar quotas + exact numbers on hover, renewals, per-provider key radios, usage links) + `/config.sh` \| `/config.ps1` payloads, regenerated per request — ops (Windows task, auto-restart, logs, re-register): [docs/serve-operations.md](docs/serve-operations.md) |
 | `mar prompt` | Startup prompt for a fresh omp session |
 | `mar account add <provider> <name> --key-stdin` | Add an alternate key for the same provider (another account); the primary key stays stored |

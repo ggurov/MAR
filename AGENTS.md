@@ -79,6 +79,7 @@ src/mar/
   limits.py      # Usage snapshots: real API fetchers + manual-check fallback
   omp.py         # omp adapter: agent.db credentials + config.yml model roles
   serve.py       # LAN HTTP config server (mar serve)
+  tokenpool.py   # tokenpool /v1/models → omp provider declaration
   store.py       # storage backends: file store + backend selection config
   vault.py       # optional KV-v2 registry backend (stdlib urllib, opt-in)
   bootstrap.py   # startup-prompt renderer + one-shot omp sync orchestration

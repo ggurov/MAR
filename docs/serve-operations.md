@@ -11,6 +11,10 @@ rights required anywhere.
 - Usage data is cached (60 s for provider fetches, 300 s for `omp usage`) and
   refreshed in the background; stale data is served immediately, so the page
   stays responsive even when a provider API or `omp usage` is slow.
+- A **Routing** card links to the tokenpool control panel
+  (`http://<host>:8940/admin`, override `MAR_TOKENPOOL_URL`). When
+  `MAR_TOKENPOOL_URL` is set on the server, `/config.sh` and `/config.ps1`
+  also declare omp's `tokenpool` provider and its models.
 - Quota cells render inline progress bars (meters side by side) filled by
   consumed quota (percent used, amber past 60%, red past 85%); hover for the
   exact credits/dollars and the reset countdown. Unbounded balances render as

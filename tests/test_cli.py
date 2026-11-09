@@ -1188,3 +1188,47 @@ class TestLimitsBars:
         assert "50%" in out and "7 / 14 cr used" in out
         assert "█" in out and "░" in out
         assert "$6.40 left (monthly)" in out
+
+
+class TestTokenpoolExport:
+    def test_export_declares_tokenpool_provider(self, reg_path, monkeypatch, capsys):
+        from mar import tokenpool
+
+        run(reg_path, "add", "zai", "--key", FAKE_KEY)
+        monkeypatch.setattr(
+            cli.tokenpool,
+            "fetch_models",
+            lambda url, **kwargs: [
+                tokenpool.TokenpoolModel(
+                    "deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 1048576, 65536
+                )
+            ],
+        )
+        capsys.readouterr()
+        assert (
+            run(
+                reg_path,
+                "export",
+                "--shell",
+                "bash",
+                "--tokenpool",
+                "http://pool.example:8940",
+            )
+            == 0
+        )
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "tokenpool:" in out
+        assert "api: openai-completions" in out
+        assert "auth: none" in out
+        assert "baseUrl: http://pool.example:8940/v1" in out
+        assert "id: deepseek-v4.1-flash" in out
+        assert "contextWindow: 1048576" in out
+        assert "maxTokens: 65536" in out
+        assert "tokenpool provider declared" in captured.err
+
+    def test_export_without_tokenpool_has_no_provider(self, reg_path, capsys):
+        run(reg_path, "add", "zai", "--key", FAKE_KEY)
+        capsys.readouterr()
+        assert run(reg_path, "export", "--shell", "bash") == 0
+        assert "tokenpool:" not in capsys.readouterr().out

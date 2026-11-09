@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from mar import __version__, bootstrap, limits, omp, providers, registry, store, vault
+from mar import __version__, bootstrap, limits, omp, providers, registry, store, tokenpool, vault
 
 PROVIDER_IDS = providers.ids()
 
@@ -169,6 +169,13 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PROVIDER=LABEL",
         help="serve this account for this export only (repeatable; the "
         "registry selection is not changed)",
+    )
+    p_exp.add_argument(
+        "--tokenpool",
+        default=None,
+        metavar="URL",
+        help="declare the tokenpool provider in models.yml by reading its "
+        "/v1/models (default: $MAR_TOKENPOOL_URL; token: $MAR_TOKENPOOL_TOKEN)",
     )
     p_exp.add_argument("--registry", default=None, metavar="PATH")
     _backend_flag(p_exp)
@@ -639,6 +646,21 @@ def _cmd_export(args: argparse.Namespace) -> int:
             )
     notes.extend(skipped)
 
+    tokenpool_url = getattr(args, "tokenpool", None) or os.environ.get("MAR_TOKENPOOL_URL")
+    if tokenpool_url:
+        try:
+            pooled = tokenpool.fetch_models(
+                tokenpool_url,
+                token=os.environ.get("MAR_TOKENPOOL_TOKEN", ""),
+            )
+            declared["tokenpool"] = tokenpool.provider_entry(tokenpool_url, pooled)
+            notes.append(
+                f"tokenpool provider declared at {tokenpool.normalize_base_url(tokenpool_url)} "
+                f"({len(pooled)} models: {', '.join(m.id for m in pooled)})"
+            )
+        except tokenpool.TokenpoolError as exc:
+            notes.append(f"tokenpool provider not declared: {exc}")
+
     # Pass through non-credential env lines from the local agent .env (e.g.
     # LM_STUDIO_BASE_URL for a LAN LM Studio). Provider credential and
     # endpoint vars are excluded — the registry/catalog is authoritative for
@@ -693,13 +715,19 @@ def _cmd_export(args: argparse.Namespace) -> int:
     models_yaml = ""
     if declared:
         models_yaml = yaml.safe_dump({"providers": declared}, sort_keys=False, allow_unicode=True)
-        windows = sorted({int(entry["models"][0]["contextWindow"]) for entry in declared.values()})
+        windows = sorted(
+            {
+                int(model["contextWindow"])
+                for entry in declared.values()
+                for model in entry["models"]
+            }
+        )
         notes.append(
             "models.yml declares "
             + ", ".join(sorted(declared))
-            + f" with contextWindow {windows[0]} (MAR-owned: export replaces the "
-            "file, omp-sync merges); omp's built-in lm-studio discovery would "
-            "fall back to 128k"
+            + " with contextWindow(s) "
+            + ", ".join(str(window) for window in windows)
+            + " (MAR-owned: export replaces the file, omp-sync merges)"
         )
 
     # Edit policy: hashline everywhere; deepseek explicitly pinned (other

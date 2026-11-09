@@ -62,6 +62,23 @@ class TestRenderConfig:
         assert "omp config set memory.backend off" in body
         assert "hindsight" not in body
 
+    def test_declares_tokenpool_provider(self, registry_path, monkeypatch):
+        from mar import tokenpool
+
+        monkeypatch.setattr(
+            cli.tokenpool,
+            "fetch_models",
+            lambda url, **kwargs: [
+                tokenpool.TokenpoolModel("deepseek-v4.1-flash", "DeepSeek", 1048576, 65536)
+            ],
+        )
+        body = serve.render_config(
+            registry_path, "bash", tokenpool="http://pool.example:8940"
+        )
+        assert "tokenpool:" in body
+        assert "baseUrl: http://pool.example:8940/v1" in body
+        assert "id: deepseek-v4.1-flash" in body
+
 
 class TestServicesSnapshot:
     def test_lists_provider_links_and_expiry(self, registry_path, monkeypatch):
@@ -598,6 +615,32 @@ class TestIndexHtml:
         assert 'class="bar"' in html  # omp windows render as bars
         assert "10% used" in html  # 90% remaining -> 10% used bar
 
+    def test_page_has_routing_card_and_tokenpool_link(self, registry_path, monkeypatch):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "claude",
+                "auth_method": "oauth",
+                "key": "tok-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        monkeypatch.delenv("MAR_TOKENPOOL_URL", raising=False)
+        html = serve.render_index_html("mar.nj02.gurov.us:8930", registry_path)
+        assert "Routing" in html
+        assert "http://mar.nj02.gurov.us:8940/admin" in html
+        monkeypatch.setenv("MAR_TOKENPOOL_URL", "http://pool.local:9000")
+        html = serve.render_index_html("mar.nj02.gurov.us:8930", registry_path)
+        assert "http://pool.local:9000/admin" in html
+
     def test_page_links_self_hosted_endpoint_when_no_usage_page_exists(
         self, registry_path, monkeypatch
     ):
@@ -661,6 +704,22 @@ class TestHttpServer:
         assert status == 200
         assert "ZAI_API_KEY=zai-key-1234567890" in body
         assert "omp config set edit.mode hashline" in body
+
+    def test_config_sh_declares_tokenpool_provider(self, server, monkeypatch):
+        from mar import tokenpool
+
+        monkeypatch.setenv("MAR_TOKENPOOL_URL", "http://127.0.0.1:8940")
+        monkeypatch.setattr(
+            cli.tokenpool,
+            "fetch_models",
+            lambda url, **kwargs: [
+                tokenpool.TokenpoolModel("deepseek-v4.1-flash", "DeepSeek", 1048576, 65536)
+            ],
+        )
+        status, body = self._get(f"{server}/config.sh")
+        assert status == 200
+        assert "tokenpool:" in body
+        assert "baseUrl: http://127.0.0.1:8940/v1" in body
 
     def test_config_ps1_served(self, server):
         status, body = self._get(f"{server}/config.ps1")
