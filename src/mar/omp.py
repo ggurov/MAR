@@ -45,11 +45,11 @@ __all__ = [
     "status_line_extension",
     "upsert_credential",
     "upsert_env_key",
+    "write_hindsight_settings",
     "write_model_declarations",
     "write_status_line",
     "write_status_line_extension",
 ]
-
 
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -259,6 +259,37 @@ def set_model_role(agent_dir: Path, role: str, model: str) -> None:
         raise OmpError(f"{config_path} has a non-mapping modelRoles entry")
     roles[role] = model
     config["modelRoles"] = roles
+    _write_config(agent_dir, config_path, config)
+
+
+def write_hindsight_settings(agent_dir: Path, *, auto_retain: bool = False) -> None:
+    """Merge MAR's hindsight memory settings into config.yml.
+
+    Sets ``hindsight.autoRetain = auto_retain``. omp's hindsight auto-retain
+    ships the whole session transcript into the memory bank every
+    ``retainEveryNTurns`` turns (``hindsight.retainMode = "full-session"``
+    default), which balloons the bank with raw transcripts; MAR turns it off
+    so only explicit ``retain`` tool calls write memories. All other
+    ``hindsight`` entries (``apiUrl`` ...) and top-level keys are preserved;
+    omp re-serializes this file anyway, so comments are not kept.
+
+    Args:
+        agent_dir: omp agent directory holding config.yml (created if missing).
+        auto_retain: value for ``hindsight.autoRetain``; default ``False``.
+
+    Raises:
+        OmpError: config.yml is not a YAML mapping, its hindsight entry is not
+            a mapping, or the write failed.
+    """
+    agent_dir = Path(agent_dir)
+    config_path, config = _load_config(agent_dir)
+    section = config.get("hindsight", {})
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        raise OmpError(f"{config_path} has a non-mapping hindsight entry")
+    section["autoRetain"] = auto_retain
+    config["hindsight"] = section
     _write_config(agent_dir, config_path, config)
 
 
