@@ -473,7 +473,7 @@ class TestServicesSnapshot:
             return limits.LimitSnapshot(
                 provider="openrouter",
                 fetched_at="2026-10-13T00:00:00+00:00",
-                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                items=(limits.LimitItem("balance", None, 315.0, "USD", "all-time"),),
                 source="api",
             )
 
@@ -482,6 +482,8 @@ class TestServicesSnapshot:
         rows = serve.services_snapshot(registry_path)
         row = next(r for r in rows if r["provider"] == "openrouter")
         assert row["usage"] == "$315.00 left"
+        assert row["meters"][0]["percent"] is None  # balance: no progress bar
+        assert "class=\"bar\"" not in serve._render_meters(row["meters"], row["usage"])
         # second call serves from the TTL cache — no second fetch
         serve.services_snapshot(registry_path)
         assert calls == ["openrouter"]
@@ -824,7 +826,7 @@ class TestServeCaching:
             return limits.LimitSnapshot(
                 provider="openrouter",
                 fetched_at="2026-10-29T00:00:00+00:00",
-                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                items=(limits.LimitItem("balance", None, 315.0, "USD", "all-time"),),
                 source="api",
             )
 
@@ -853,7 +855,7 @@ class TestServeCaching:
             return limits.LimitSnapshot(
                 provider="openrouter",
                 fetched_at="2026-10-29T00:00:00+00:00",
-                items=(limits.LimitItem("credits", 10.0, 325.0, "USD", "all-time"),),
+                items=(limits.LimitItem("balance", None, 315.0, "USD", "all-time"),),
                 source="api",
             )
 

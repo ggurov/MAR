@@ -270,7 +270,7 @@ def test_fetch_openrouter_success_parses_credits(monkeypatch):
     assert snapshot.source == "api"
     assert snapshot.note == ""
     assert snapshot.items == (
-        LimitItem(name="credits", used=12.5, limit=50.0, unit="USD", window="all-time"),
+        LimitItem(name="Balance", used=None, limit=37.5, unit="USD", window="all-time"),
     )
     assert captured["url"] == CREDITS_URL
     assert captured["method"] == "GET"

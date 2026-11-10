@@ -191,8 +191,10 @@ def _fetch_openrouter(key: str, timeout: float) -> LimitSnapshot:
         timeout: Request timeout in seconds.
 
     Returns:
-        LimitSnapshot with one item: ``credits`` (used = total_usage,
-        limit = total_credits, USD, all-time window).
+        LimitSnapshot with one ``balance`` item in USD: the account's
+        remaining credits (``total_credits - total_usage``). It is unbounded
+        (``used`` is None), so the UI shows the dollar amount without a
+        progress bar.
 
     Raises:
         LimitError: On non-200/HTTPError/URLError/timeout, malformed JSON,
@@ -208,14 +210,16 @@ def _fetch_openrouter(key: str, timeout: float) -> LimitSnapshot:
     data = payload.get("data")
     if not isinstance(data, dict):
         raise LimitError("openrouter credits response is missing the 'data' object")
+    total = _number(data, "total_credits")
+    used = _number(data, "total_usage")
     return LimitSnapshot(
         provider="openrouter",
         fetched_at=_now_iso(),
         items=(
             LimitItem(
-                name="credits",
-                used=_number(data, "total_usage"),
-                limit=_number(data, "total_credits"),
+                name="Balance",
+                used=None,
+                limit=max(total - used, 0.0),
                 unit="USD",
                 window="all-time",
             ),
