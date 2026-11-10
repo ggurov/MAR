@@ -63,6 +63,7 @@ class LimitItem:
         window: Period the numbers cover, e.g. ``"all-time"``.
         reset_at_ms: Epoch milliseconds when the window resets; 0 when the
             provider does not report a reset.
+        note: Human-only text for value-less items (e.g. "console only").
     """
 
     name: str
@@ -71,7 +72,7 @@ class LimitItem:
     unit: str
     window: str
     reset_at_ms: int = 0
-
+    note: str = ""
 
 @dataclass(frozen=True)
 class LimitSnapshot:
@@ -567,22 +568,24 @@ def _fetch_cline(key: str, timeout: float) -> LimitSnapshot:
 
 
 def _fetch_opencode(key: str, timeout: float) -> LimitSnapshot:
-    """Read OpenCode Go's rolling quota windows.
+    """Read OpenCode Go's rolling quota windows and the wallet-balance note.
 
     OpenCode's Zen API does not expose the wallet balance to API keys (only a
     browser console session can read it). The Go usage route does expose the
-    5-hour/weekly/monthly percentages and reset timestamps; those are used.
+    5-hour/weekly/monthly percentages and reset timestamps; those are used,
+    and a value-less ``Wallet balance`` item records where the balance lives.
 
     Args:
         key: OpenCode API key (bearer token).
         timeout: Request timeout in seconds.
 
     Returns:
-        LimitSnapshot with percent items for available Go windows.
+        LimitSnapshot with percent items for available Go windows plus the
+        wallet-balance note item.
 
     Raises:
-        LimitError: On HTTP/connection/timeout failures, malformed JSON, or a
-            response with no usable window. Messages never include the key.
+        LimitError: On HTTP/connection/timeout failures or malformed JSON.
+            Messages never include the key.
     """
     request = urllib.request.Request(
         _OPENCODE_USAGE_URL,
@@ -616,8 +619,18 @@ def _fetch_opencode(key: str, timeout: float) -> LimitSnapshot:
                 reset_at_ms=reset,
             )
         )
-    if not items:
+    if not any(item.unit == "percent" for item in items):
         raise LimitError("opencode usage response has no usable quota windows")
+    items.append(
+        LimitItem(
+            name="Wallet balance",
+            used=None,
+            limit=None,
+            unit="",
+            window="console",
+            note="OpenCode console session only (API keys cannot read it)",
+        )
+    )
     return LimitSnapshot(
         provider="opencode",
         fetched_at=_now_iso(),

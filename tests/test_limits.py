@@ -570,7 +570,7 @@ def test_cline_balance_uses_millionth_usd_units(monkeypatch):
 
 
 def test_opencode_go_usage_windows(monkeypatch):
-    """OpenCode Go exposes rolling/weekly/monthly percentages, not a wallet."""
+    """OpenCode Go windows plus a wallet note (balance is console-only)."""
     payload = {
         "usage": {
             "rolling": {"status": "ok", "percent": 0, "resetsAt": "2026-11-10T17:51:55.460Z"},
@@ -586,12 +586,17 @@ def test_opencode_go_usage_windows(monkeypatch):
 
     monkeypatch.setattr(limits, "_open", fake)
     snap = fetch("opencode", KEY)
-    assert [(item.name, item.used, item.unit) for item in snap.items] == [
+    percent_items = [item for item in snap.items if item.unit == "percent"]
+    assert [(item.name, item.used, item.unit) for item in percent_items] == [
         ("5-hour", 0.0, "percent"),
         ("Weekly", 32.0, "percent"),
         ("Monthly", 100.0, "percent"),
     ]
-    assert all(item.reset_at_ms > 0 for item in snap.items)
+    assert all(item.reset_at_ms > 0 for item in percent_items)
+    wallet = snap.items[-1]
+    assert wallet.name == "Wallet balance"
+    assert wallet.used is None and wallet.limit is None
+    assert wallet.note == "OpenCode console session only (API keys cannot read it)"
 
 
 def test_opencode_without_windows_raises(monkeypatch):

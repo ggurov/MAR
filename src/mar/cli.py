@@ -445,6 +445,9 @@ def _cmd_limits(args: argparse.Namespace) -> int:
                 print(f"  {snap.note}")
             for item in snap.items:
                 unit = (item.unit or "").lower()
+                if item.used is None and item.limit is None and item.note:
+                    print(f"  {item.name:<10} {item.note}")
+                    continue
                 suffix = "cr" if unit.startswith("cre") else item.unit
                 if unit == "percent" and item.used is not None:
                     print(
