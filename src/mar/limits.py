@@ -42,6 +42,7 @@ _open = urllib.request.urlopen  # module-level injectable; tests monkeypatch lim
 
 _OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 _COMMANDCODE_CREDITS_URL = "https://api.commandcode.ai/alpha/billing/credits"
+_COMMANDCODE_SUBSCRIPTIONS_URL = "https://api.commandcode.ai/alpha/billing/subscriptions"
 _DEFAULT_TIMEOUT = 10.0
 
 
@@ -365,14 +366,19 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
     ``monthlyCredits`` is the remaining plan balance; purchased/free credits
     are subtracted because they are not part of the monthly allowance.
 
+    The monthly reset is not in the credits response. It comes from the
+    account's Stripe subscription (``currentPeriodEnd``) fetched best-effort;
+    when that call fails the Monthly item simply has no reset.
+
     Args:
         key: commandcode API key (bearer token).
         timeout: Request timeout in seconds.
 
     Returns:
         LimitSnapshot with ``5-hour``/``Weekly`` items in credits (plus their
-        reset epoch) and a ``Monthly`` item in USD. Without window caps the
-        fallback is a plain ``Balance`` item (no percentage).
+        reset epoch) and a ``Monthly`` item in USD with the billing-period
+        reset. Without window caps the fallback is a plain ``Balance`` item
+        (no percentage), still carrying the billing-period reset.
 
     Raises:
         LimitError: On HTTP/connection/timeout failures, malformed JSON, a
@@ -381,15 +387,11 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
     """
     request = urllib.request.Request(
         _COMMANDCODE_CREDITS_URL,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Accept": "application/json",
-            # commandcode's edge rejects the default Python-urllib UA (403).
-            "User-Agent": "MAR/1.0 (+https://github.com/ggurov/MAR)",
-        },
+        headers=_commandcode_headers(key),
         method="GET",
     )
     payload = _read_json(request, timeout, api_name="commandcode billing API")
+    period_end_ms = _commandcode_period_end(key, timeout)
     items: list[LimitItem] = []
     caps: dict[str, float | None] = {}
     windows = payload.get("windowLimits")
@@ -439,6 +441,7 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
                     limit=monthly_cap,
                     unit="USD",
                     window="monthly",
+                    reset_at_ms=period_end_ms,
                 )
             )
         else:
@@ -449,6 +452,7 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
                     limit=balance,
                     unit="USD",
                     window="monthly",
+                    reset_at_ms=period_end_ms,
                 )
             )
     if not items:
@@ -459,6 +463,46 @@ def _fetch_commandcode(key: str, timeout: float) -> LimitSnapshot:
         items=tuple(items),
         source="api",
     )
+
+
+def _commandcode_headers(key: str) -> dict[str, str]:
+    """Return request headers for commandcode's alpha billing routes."""
+    return {
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+        # commandcode's edge rejects the default Python-urllib UA (403).
+        "User-Agent": "MAR/1.0 (+https://github.com/ggurov/MAR)",
+    }
+
+
+def _commandcode_period_end(key: str, timeout: float) -> int:
+    """Return the account's billing-period end in epoch ms (0 if unknown).
+
+    The credits endpoint never exposes the monthly reset. commandcode's
+    subscription object carries ``currentPeriodEnd`` (ISO-8601), which is the
+    monthly credit rollover. This is best-effort: a failed/absent subscription
+    call leaves the Monthly meter without a reset instead of failing usage.
+    """
+    request = urllib.request.Request(
+        _COMMANDCODE_SUBSCRIPTIONS_URL,
+        headers=_commandcode_headers(key),
+        method="GET",
+    )
+    try:
+        payload = _read_json(request, timeout, api_name="commandcode subscriptions API")
+    except LimitError:
+        return 0
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return 0
+    value = data.get("currentPeriodEnd")
+    if not isinstance(value, str):
+        return 0
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return 0
+    return max(int(moment.timestamp() * 1000), 0)
 
 
 _FETCHERS: dict[str, Callable[[str, float], LimitSnapshot]] = {

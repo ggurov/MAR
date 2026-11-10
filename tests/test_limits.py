@@ -416,6 +416,7 @@ def test_limit_snapshot_note_defaults_to_empty():
 
 
 COMMANDCODE_URL = "https://api.commandcode.ai/alpha/billing/credits"
+COMMANDCODE_SUBSCRIPTIONS_URL = "https://api.commandcode.ai/alpha/billing/subscriptions"
 
 
 def commandcode_payload(**overrides) -> dict:
@@ -437,6 +438,15 @@ def test_commandcode_fetches_balance_and_windows_per_key():
 
     def fake(request, timeout):
         calls.append(request)
+        if request.full_url == COMMANDCODE_SUBSCRIPTIONS_URL:
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "success": True,
+                        "data": {"currentPeriodEnd": "2026-11-11T00:26:57.000Z"},
+                    }
+                ).encode()
+            )
         return FakeResponse(json.dumps(commandcode_payload()).encode())
 
     import mar.limits as limits_mod
@@ -458,7 +468,11 @@ def test_commandcode_fetches_balance_and_windows_per_key():
     assert (monthly.limit, monthly.unit) == (70.0, "USD")
     assert monthly.used == pytest.approx(63.6006663246)
     assert monthly.used / monthly.limit == pytest.approx(0.9085809475)
-    assert calls[0].full_url == COMMANDCODE_URL
+    assert monthly.reset_at_ms == 1794356817000  # billing period end
+    assert [call.full_url for call in calls] == [
+        COMMANDCODE_URL,
+        COMMANDCODE_SUBSCRIPTIONS_URL,
+    ]
     assert calls[0].get_header("Authorization") == "Bearer user_fake_key_1234567890"
     assert calls[0].get_header("User-agent").startswith("MAR/")
 
@@ -498,6 +512,21 @@ def test_commandcode_malformed_payload_raises(payload):
             fetch("commandcode", KEY)
     finally:
         limits_mod._open = original
+
+
+def test_commandcode_subscription_failure_keeps_usage(monkeypatch):
+    """A failed period lookup only drops the Monthly reset, not the snapshot."""
+
+    def fake(request, timeout):
+        if request.full_url == COMMANDCODE_SUBSCRIPTIONS_URL:
+            raise urllib.error.HTTPError(request.full_url, 500, "down", {}, None)
+        return FakeResponse(json.dumps(commandcode_payload()).encode())
+
+    monkeypatch.setattr(limits, "_open", fake)
+    snap = fetch("commandcode", KEY)
+    monthly = next(item for item in snap.items if item.name == "Monthly")
+    assert monthly.reset_at_ms == 0
+    assert monthly.used is not None
 
 
 def test_commandcode_error_never_leaks_key(monkeypatch):
