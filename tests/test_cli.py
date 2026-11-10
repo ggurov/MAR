@@ -138,9 +138,9 @@ class TestLimits:
         out = capsys.readouterr().out
         assert seen["url"] == "https://openrouter.ai/api/v1/credits"
         assert seen["header"]["Authorization"] == "Bearer sk-or-fake-123456"
-        assert "5.25 / 25 USD" in out
-        assert "█" in out and "░" in out  # progress bar
-        assert "21%" in out
+        assert "$19.75 left" in out
+        assert "Balance" in out
+        assert "█" not in out  # OpenRouter is a balance, not a bounded quota
 
     def test_limits_no_active_subscriptions(self, reg_path):
         assert run(reg_path, "limits") == 1
