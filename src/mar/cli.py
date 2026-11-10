@@ -446,6 +446,12 @@ def _cmd_limits(args: argparse.Namespace) -> int:
             for item in snap.items:
                 unit = (item.unit or "").lower()
                 suffix = "cr" if unit.startswith("cre") else item.unit
+                if unit == "percent" and item.used is not None:
+                    print(
+                        f"  {item.name:<10} {_meter_bar(item.used / 100)} "
+                        f"{item.used:3.0f}% used"
+                    )
+                    continue
                 if item.used is not None and item.limit:
                     fraction = item.used / item.limit
                     if unit in ("usd", "$"):

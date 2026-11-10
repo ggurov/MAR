@@ -178,6 +178,8 @@ def test_export_key_env_vars_match_official_roster(provider_id, env_var):
 def test_limits_kind_api_providers_include_both_local_endpoints():
     api_providers = [p for p in CATALOG if p.limits_kind == "api"]
     assert [p.id for p in api_providers] == [
+        "cline",
+        "opencode",
         "openrouter",
         "gemini",
         "commandcode",
