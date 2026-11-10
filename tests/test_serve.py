@@ -544,14 +544,28 @@ class TestServicesSnapshot:
                     limits.LimitItem("5-hour", 0.0, 100.0, "percent", "5-hour"),
                     limits.LimitItem("Weekly", 32.0, 100.0, "percent", "Weekly"),
                     limits.LimitItem("Monthly", 100.0, 100.0, "percent", "Monthly"),
+                    limits.LimitItem(
+                        "Wallet balance",
+                        used=None,
+                        limit=None,
+                        unit="",
+                        window="console",
+                        note="OpenCode console session only (API keys cannot read it)",
+                    ),
                 ),
                 source="api",
             ),
         )
         row = next(r for r in serve.services_snapshot(registry_path) if r["provider"] == "opencode")
-        assert row["usage"] == "5-hour 0% used · Weekly 32% used · Monthly 100% used"
-        assert [m["percent"] for m in row["meters"]] == [0, 32, 100]
+        assert row["usage"] == (
+            "5-hour 0% used · Weekly 32% used · Monthly 100% used"
+            " · Wallet balance: OpenCode console session only (API keys cannot read it)"
+        )
+        assert [m["percent"] for m in row["meters"]] == [0, 32, 100, None]
         assert row["meters"][2]["level"] == "crit"
+        wallet = row["meters"][3]
+        assert wallet["label"] == "Wallet balance"
+        assert wallet["detail"] == "OpenCode console session only (API keys cannot read it)"
 
     def test_openrouter_row_carries_live_credits(self, registry_path, monkeypatch):
         calls = []

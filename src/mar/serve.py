@@ -151,6 +151,10 @@ def _format_snapshot_items(items: tuple) -> str:
     now = time.time()
     for item in items:
         unit = (item.unit or "").lower()
+        if item.used is None and item.limit is None:
+            if item.note:
+                parts.append(f"{item.name}: {item.note}")
+            continue
         if unit in ("usd", "$"):
             if item.used is not None and item.limit is not None:
                 parts.append(f"${item.limit - item.used:.2f} left")
@@ -296,6 +300,18 @@ def _meters_from_snapshot(items: tuple) -> tuple[dict, ...]:
     meters: list[dict] = []
     for item in items:
         unit = (item.unit or "").lower()
+        if item.used is None and item.limit is None:
+            if item.note:
+                meters.append(
+                    {
+                        "label": item.name,
+                        "percent": None,
+                        "level": "ok",
+                        "detail": item.note,
+                        "reset": "",
+                    }
+                )
+            continue
         if unit in ("usd", "$"):
             if item.used is not None and item.limit is not None:
                 detail = f"${item.limit - item.used:.2f} left"
