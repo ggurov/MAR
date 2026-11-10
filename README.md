@@ -195,7 +195,7 @@ PS> mar prompt    # the startup prompt for a fresh omp session
 | --- | --- |
 | `mar add <provider> --key KEY` | Register a subscription (`--key-stdin` avoids shell history; `--default` picks a model) |
 | `mar list [--json]` | Active subscriptions, masked keys, default models |
-| `mar limits [provider]` | Real API checks (OpenRouter credits, Gemini key-liveness, commandcode per-key balance + 5h/weekly windows); exact pointers elsewhere |
+| `mar limits [provider]` | Real API checks (OpenRouter balance, Gemini key-liveness, commandcode per-key balance + 5h/weekly/monthly windows, Cline credit balance, OpenCode Go windows); exact pointers elsewhere |
 | `mar omp-sync [--set-role role=model]` | Write stored keys into omp (agent.db / `.env`), set `modelRoles` |
 | `mar pull` | Adopt credentials from the local omp install (`agent.db` OAuth logins + `.env` keys) into the registry |
 | `mar export [--shell bash] [--memory on\|off] [--memory-url URL] [--account PROVIDER=LABEL] [--tokenpool URL] [--output F]` | The zero-install pastable — commands only, BEGIN/END framed, notes on stderr; `--account` pins a key for this run; `--tokenpool` (or `$MAR_TOKENPOOL_URL`) declares the tokenpool omp provider in `models.yml` from its `/v1/models`; `--memory off` writes `memory.backend off` |

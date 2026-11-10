@@ -159,6 +159,15 @@ def _format_snapshot_items(items: tuple) -> str:
             elif item.used is not None:
                 parts.append(f"${item.used:.2f} used")
             continue
+        if unit == "percent":
+            if item.used is None:
+                continue
+            text = f"{item.name} {item.used:.0f}% used"
+            if item.reset_at_ms:
+                resets = (item.reset_at_ms / 1000 - now) / 3600
+                text += f" (resets in {_format_duration(resets)})"
+            parts.append(text)
+            continue
         suffix = "cr" if unit.startswith("cre") else item.unit
         if item.used is not None and item.limit is not None:
             text = f"{item.name} {item.used:g}/{item.limit:g} {suffix}".rstrip()
@@ -301,6 +310,11 @@ def _meters_from_snapshot(items: tuple) -> tuple[dict, ...]:
                 if item.used is not None and item.limit
                 else None
             )
+        elif unit == "percent":
+            if item.used is None:
+                continue
+            fraction = item.used / 100
+            detail = f"{item.used:.0f}% used"
         else:
             suffix = "cr" if unit.startswith("cre") else item.unit
             if item.used is not None and item.limit is not None:
@@ -659,12 +673,19 @@ def services_snapshot(registry: Path) -> list[dict]:
         shared_meters = (
             _meters_from_omp(omp_limits) if shared_quota is not None else ()
         )
+        provider_is_api = entry is not None and entry.limits_kind == "api"
         for label, key in keys:
             selected = label == selected_label
             quota = shared_quota
             meters = shared_meters
-            if quota is None:
-                quota, meters = _usage_entry(sub.provider, key, account=label)
+            if provider_is_api and (quota is None or sub.provider == "cline"):
+                live_text, live_meters = _usage_entry(sub.provider, key, account=label)
+                if live_meters:
+                    meters = (*meters, *live_meters)
+                if quota is None:
+                    quota = live_text
+            elif quota is None:
+                quota = _usage_cell(sub.provider, key, account=label)
             rows.append(
                 {
                     "provider": sub.provider,

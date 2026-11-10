@@ -17,8 +17,8 @@ ids were additionally observed live in `~/.omp/agent/agent.db`; `strata` and
 | 1 | cursor-grok | Cursor / Grok | cursor | env `CURSOR_ACCESS_TOKEN` | https://cursor.com/settings | https://cursor.com/dashboard/spending | manual |
 | 2 | codex | OpenAI Codex | openai-codex | env `OPENAI_CODEX_OAUTH_TOKEN` | https://platform.openai.com/api-keys | https://platform.openai.com/usage | manual |
 | 3 | claude | Anthropic Claude | anthropic | env `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys | https://claude.ai/new#settings/usage | manual |
-| 4 | cline | Cline | cline-pass | agent.db login row | https://cline.bot | https://app.cline.bot/dashboard/subscription | manual |
-| 5 | opencode | OpenCode | opencode-go | agent.db login row | https://opencode.ai | https://opencode.ai/console/ | manual |
+| 4 | cline | Cline | cline-pass | agent.db login row | https://cline.bot | https://app.cline.bot/dashboard/subscription | api (`GET /api/v1/users/{id}/balance`, millionths USD) |
+| 5 | opencode | OpenCode | opencode-go | agent.db login row | https://opencode.ai | https://opencode.ai/console/ | api (`GET /zen/go/v1/usage`: Go 5h/weekly/monthly windows) |
 | 6 | zai | Z.ai | zai | agent.db login row | https://z.ai/manage-apikey/apikey-list | https://z.ai/manage-apikey/coding-plan/personal/usage | manual |
 | 7 | openrouter | OpenRouter | openrouter | agent.db login row | https://openrouter.ai/settings/keys | https://openrouter.ai/credits | api |
 | 8 | antigravity | Google Antigravity | google-antigravity | agent.db (OAuth-first) | https://antigravity.google | https://antigravity.google | manual |
@@ -50,9 +50,13 @@ Notes:
   `GET /api/v1/credits`; cline/opencode/zai validated by `omp usage` account
   endpoints in an isolated agent dir; cursor env token accepted by omp's
   registry (123 cursor models listed).
+- Added 2026-11-10: cline credit balance via
+  `GET /api/v1/users/{id}/balance` (integer millionths of USD; $13.57 live),
+  and OpenCode Go windows via `GET /zen/go/v1/usage` (0/32/100% live). OpenCode
+  API keys cannot read the Zen wallet balance; only a browser console session
+  can, so MAR shows the Go windows instead.
 - `omp usage` reports quota windows for cline, opencode, and zai out of the
-  box; MAR's `mar limits` covers openrouter via API and points at
-  `limits_url` for the rest (M8 widens this).
+  box; MAR also fetches the live cline balance and OpenCode Go windows.
 - Default models are the user's choice at `mar add` time; the catalog never
   invents one.
 

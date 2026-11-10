@@ -65,7 +65,15 @@ def raises_open(exc: Exception):
 def test_supported_lists_api_kind_ids_in_catalog_order():
     from mar.providers import CATALOG
 
-    assert supported() == ["openrouter", "gemini", "commandcode", "strata", "qwen"]
+    assert supported() == [
+        "cline",
+        "opencode",
+        "openrouter",
+        "gemini",
+        "commandcode",
+        "strata",
+        "qwen",
+    ]
     assert supported() == [p.id for p in CATALOG if p.limits_kind == "api"]
 
 STRATA_URL = "http://deepseek.nj02.gurov.us/v1"
@@ -537,3 +545,60 @@ def test_commandcode_error_never_leaks_key(monkeypatch):
     with pytest.raises(LimitError) as excinfo:
         fetch("commandcode", KEY)
     assert KEY not in str(excinfo.value)
+
+
+def test_cline_balance_uses_millionth_usd_units(monkeypatch):
+    """Cline's integer balance is millionths of a dollar."""
+    calls = []
+
+    def fake(request, timeout):
+        calls.append(request.full_url)
+        if request.full_url.endswith("/users/me"):
+            return FakeResponse(json.dumps({"data": {"id": "usr-1"}}).encode())
+        return FakeResponse(json.dumps({"data": {"balance": 13569324}}).encode())
+
+    monkeypatch.setattr(limits, "_open", fake)
+    snap = fetch("cline", KEY)
+    assert snap.items == (
+        LimitItem(name="Balance", used=None, limit=13.569324, unit="USD", window="credits"),
+    )
+    assert snap.items[0].reset_at_ms == 0
+    assert calls == [
+        "https://api.cline.bot/api/v1/users/me",
+        "https://api.cline.bot/api/v1/users/usr-1/balance",
+    ]
+
+
+def test_opencode_go_usage_windows(monkeypatch):
+    """OpenCode Go exposes rolling/weekly/monthly percentages, not a wallet."""
+    payload = {
+        "usage": {
+            "rolling": {"status": "ok", "percent": 0, "resetsAt": "2026-11-10T17:51:55.460Z"},
+            "weekly": {"status": "ok", "percent": 32, "resetsAt": "2026-11-16T00:00:00.000Z"},
+            "monthly": {"status": "rate-limited", "percent": 100, "resetsAt": "2026-11-22T21:38:47.000Z"},
+        }
+    }
+
+    def fake(request, timeout):
+        assert request.full_url == "https://opencode.ai/zen/go/v1/usage"
+        assert request.get_header("Authorization") == f"Bearer {KEY}"
+        return FakeResponse(json.dumps(payload).encode())
+
+    monkeypatch.setattr(limits, "_open", fake)
+    snap = fetch("opencode", KEY)
+    assert [(item.name, item.used, item.unit) for item in snap.items] == [
+        ("5-hour", 0.0, "percent"),
+        ("Weekly", 32.0, "percent"),
+        ("Monthly", 100.0, "percent"),
+    ]
+    assert all(item.reset_at_ms > 0 for item in snap.items)
+
+
+def test_opencode_without_windows_raises(monkeypatch):
+    monkeypatch.setattr(
+        limits,
+        "_open",
+        lambda request, timeout: FakeResponse(json.dumps({"usage": {}}).encode()),
+    )
+    with pytest.raises(LimitError):
+        fetch("opencode", KEY)

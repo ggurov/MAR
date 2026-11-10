@@ -166,11 +166,13 @@ CATALOG: tuple[Provider, ...] = (
         export_env_var="CLINE_API_KEY",
         export_oauth_env_var="",
         default_model=None,
-        limits_kind="manual",
+        limits_kind="api",
         verified=True,
         notes=(
             "omp provider id observed live in ~/.omp/agent/agent.db "
-            "(2026-10-10); key/limits pages not yet confirmed."),
+            "(2026-10-10). Credit balance from "
+            "GET /api/v1/users/{id}/balance (integer millionths USD); "
+            "ClinePass windows come from omp usage. Verified 2026-11-10."),
     ),
     Provider(
         id="opencode",
@@ -184,11 +186,13 @@ CATALOG: tuple[Provider, ...] = (
         export_env_var="OPENCODE_API_KEY",
         export_oauth_env_var="",
         default_model=None,
-        limits_kind="manual",
+        limits_kind="api",
         verified=True,
         notes=(
             "omp provider id observed live in ~/.omp/agent/agent.db "
-            "(2026-10-10); key/limits pages not yet confirmed."),
+            "(2026-10-10). Go quota windows from GET /zen/go/v1/usage; "
+            "API keys cannot read the Zen wallet balance (console session "
+            "only). Verified 2026-11-10."),
     ),
     Provider(
         id="zai",

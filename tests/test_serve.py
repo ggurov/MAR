@@ -465,6 +465,94 @@ class TestServicesSnapshot:
         )
         assert rows["commandcode"]["renew"] == ""
 
+    def test_cline_balance_merges_with_clinepass_windows(self, registry_path, monkeypatch):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "cline",
+                "auth_method": "api_key",
+                "key": "cline-key-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(
+            serve,
+            "_run_omp_usage",
+            lambda: {
+                "reports": [
+                    {
+                        "provider": "cline-pass",
+                        "limits": [
+                            {
+                                "id": "cline-pass:monthly",
+                                "amount": {"remaining": 50, "limit": 100, "unit": "percent"},
+                                "window": {"label": "Monthly"},
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(
+            serve.limits,
+            "fetch",
+            lambda provider, key, **kwargs: limits.LimitSnapshot(
+                provider=provider,
+                fetched_at="2026-11-10T00:00:00+00:00",
+                items=(limits.LimitItem("Balance", None, 13.569324, "USD", "credits"),),
+                source="api",
+            ),
+        )
+        row = next(r for r in serve.services_snapshot(registry_path) if r["provider"] == "cline")
+        assert row["usage"] == "monthly 50%"
+        assert [m["label"] for m in row["meters"]] == ["Monthly", "Balance"]
+        assert row["meters"][1]["percent"] is None
+        assert row["meters"][1]["detail"] == "$13.57 left"
+
+    def test_opencode_go_windows_fill_live_row(self, registry_path, monkeypatch):
+        _add_sub(
+            registry_path,
+            {
+                "provider": "opencode",
+                "auth_method": "api_key",
+                "key": "oc-key-123456",
+                "models": [],
+                "default_model": None,
+                "added_at": "2026-10-10T00:00:00+00:00",
+                "status": "active",
+                "notes": "",
+                "expires_at_ms": 0,
+            },
+        )
+        monkeypatch.setattr(serve, "_usage_cache", {})
+        monkeypatch.setattr(serve, "_omp_cache", {})
+        monkeypatch.setattr(serve, "_run_omp_usage", dict)
+        monkeypatch.setattr(
+            serve.limits,
+            "fetch",
+            lambda provider, key, **kwargs: limits.LimitSnapshot(
+                provider=provider,
+                fetched_at="2026-11-10T00:00:00+00:00",
+                items=(
+                    limits.LimitItem("5-hour", 0.0, 100.0, "percent", "5-hour"),
+                    limits.LimitItem("Weekly", 32.0, 100.0, "percent", "Weekly"),
+                    limits.LimitItem("Monthly", 100.0, 100.0, "percent", "Monthly"),
+                ),
+                source="api",
+            ),
+        )
+        row = next(r for r in serve.services_snapshot(registry_path) if r["provider"] == "opencode")
+        assert row["usage"] == "5-hour 0% used · Weekly 32% used · Monthly 100% used"
+        assert [m["percent"] for m in row["meters"]] == [0, 32, 100]
+        assert row["meters"][2]["level"] == "crit"
+
     def test_openrouter_row_carries_live_credits(self, registry_path, monkeypatch):
         calls = []
 

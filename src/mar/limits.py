@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -499,20 +500,138 @@ def _commandcode_period_end(key: str, timeout: float) -> int:
     data = payload.get("data")
     if not isinstance(data, dict):
         return 0
-    value = data.get("currentPeriodEnd")
+    return _parse_iso_ms(data.get("currentPeriodEnd"))
+
+
+_CLINE_API_BASE = "https://api.cline.bot"
+_OPENCODE_USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
+
+
+def _parse_iso_ms(value: object) -> int:
+    """Parse an ISO-8601 timestamp into epoch milliseconds (0 if invalid)."""
     if not isinstance(value, str):
         return 0
     try:
-        moment = datetime.fromisoformat(value)
+        return max(int(datetime.fromisoformat(value).timestamp() * 1000), 0)
     except ValueError:
         return 0
-    return max(int(moment.timestamp() * 1000), 0)
+
+
+def _fetch_cline(key: str, timeout: float) -> LimitSnapshot:
+    """Read Cline's pay-as-you-go credit balance.
+
+    Cline reports integer money in millionths of a USD (``500000`` = $0.50).
+    The profile call supplies the user id required by the balance route.
+
+    Args:
+        key: Cline API key (bearer token).
+        timeout: Request timeout in seconds.
+
+    Returns:
+        LimitSnapshot with one unbounded ``Balance`` item in USD.
+
+    Raises:
+        LimitError: On HTTP/connection/timeout failures, malformed JSON, a
+            missing user id/balance, or a non-numeric balance. Messages never
+            include the key.
+    """
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+        "User-Agent": "MAR/1.0 (+https://github.com/ggurov/MAR)",
+    }
+    profile_request = urllib.request.Request(
+        f"{_CLINE_API_BASE}/api/v1/users/me", headers=headers, method="GET"
+    )
+    profile = _read_json(profile_request, timeout, api_name="cline profile API")
+    profile_data = profile.get("data")
+    user_id = profile_data.get("id") if isinstance(profile_data, dict) else None
+    if not isinstance(user_id, str) or not user_id:
+        raise LimitError("cline profile response has no user id")
+    balance_request = urllib.request.Request(
+        f"{_CLINE_API_BASE}/api/v1/users/{urllib.parse.quote(user_id, safe='')}/balance",
+        headers=headers,
+        method="GET",
+    )
+    payload = _read_json(balance_request, timeout, api_name="cline balance API")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise LimitError("cline balance response is missing the 'data' object")
+    usd = max(_number(data, "balance"), 0.0) / 1_000_000.0
+    return LimitSnapshot(
+        provider="cline",
+        fetched_at=_now_iso(),
+        items=(LimitItem(name="Balance", used=None, limit=usd, unit="USD", window="credits"),),
+        source="api",
+    )
+
+
+def _fetch_opencode(key: str, timeout: float) -> LimitSnapshot:
+    """Read OpenCode Go's rolling quota windows.
+
+    OpenCode's Zen API does not expose the wallet balance to API keys (only a
+    browser console session can read it). The Go usage route does expose the
+    5-hour/weekly/monthly percentages and reset timestamps; those are used.
+
+    Args:
+        key: OpenCode API key (bearer token).
+        timeout: Request timeout in seconds.
+
+    Returns:
+        LimitSnapshot with percent items for available Go windows.
+
+    Raises:
+        LimitError: On HTTP/connection/timeout failures, malformed JSON, or a
+            response with no usable window. Messages never include the key.
+    """
+    request = urllib.request.Request(
+        _OPENCODE_USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "User-Agent": "MAR/1.0 (+https://github.com/ggurov/MAR)",
+        },
+        method="GET",
+    )
+    payload = _read_json(request, timeout, api_name="opencode usage API")
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        raise LimitError("opencode usage response has no 'usage' object")
+    items: list[LimitItem] = []
+    for field, label in (("rolling", "5-hour"), ("weekly", "Weekly"), ("monthly", "Monthly")):
+        entry = usage.get(field)
+        if not isinstance(entry, dict):
+            continue
+        percent = _optional_number(entry, "percent")
+        reset = _parse_iso_ms(entry.get("resetsAt"))
+        if percent is None and not reset:
+            continue
+        items.append(
+            LimitItem(
+                name=label,
+                used=percent,
+                limit=100.0 if percent is not None else None,
+                unit="percent",
+                window=label,
+                reset_at_ms=reset,
+            )
+        )
+    if not items:
+        raise LimitError("opencode usage response has no usable quota windows")
+    return LimitSnapshot(
+        provider="opencode",
+        fetched_at=_now_iso(),
+        items=tuple(items),
+        source="api",
+    )
 
 
 _FETCHERS: dict[str, Callable[[str, float], LimitSnapshot]] = {
     "openrouter": _fetch_openrouter,
     "gemini": _fetch_gemini,
     "commandcode": _fetch_commandcode,
+    "cline": _fetch_cline,
+    "opencode": _fetch_opencode,
 }
 
 
