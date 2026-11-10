@@ -131,6 +131,13 @@ CREATE TABLE auth_credentials (
          )
 ```
 
+`mar omp-sync` also writes `hindsight.autoRetain = false` into
+`<agent_dir>/config.yml` (`omp.write_hindsight_settings`), so only explicit
+`retain` tool calls feed the memory bank — full-session auto-retain would
+mirror raw transcripts into it. Other `hindsight.*` keys (e.g. `apiUrl`)
+are preserved. See `docs/transcript-search.md` for the transcript-search
+follow-up this decision defers.
+
 Live rows use `credential_type = 'api_key'` and `data = '{"key":"..."}'`
 (JSON object with a `key` field). Provider ids observed live: `opencode-go`,
 `cline-pass`, `zai`.

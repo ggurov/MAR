@@ -198,8 +198,10 @@ def sync(
     providers are still written.
     Afterwards, each ``roles`` entry is applied via ``set_model_role``, the
     fixed :func:`omp.standard_status_line` segments replace any cloned ones,
-    and the ``provider/api-id`` status-line extension is installed (errors
-    propagate — these are single all-or-nothing config writes).
+    the ``provider/api-id`` status-line extension is installed, and hindsight
+    auto-retain is disabled (only explicit ``retain`` tool calls write
+    memories; errors propagate — these are single all-or-nothing config
+    writes).
 
     Args:
         reg: Registry to sync from; only active subscriptions are used.
@@ -211,8 +213,8 @@ def sync(
         A :class:`SyncReport` listing written omp ids and skip reasons.
 
     Raises:
-        omp.OmpError: If applying a model role, the status line, or the
-            status-line extension fails.
+        omp.OmpError: If applying a model role, the status line, the
+            status-line extension, or the hindsight settings fails.
     """
     target = Path(agent_dir) if agent_dir is not None else omp.default_agent_dir()
     written: list[str] = []
@@ -228,4 +230,5 @@ def sync(
             omp.set_model_role(target, role, model)
     omp.write_status_line(target)
     omp.write_status_line_extension(target)
+    omp.write_hindsight_settings(target)
     return SyncReport(written=tuple(written), skipped=tuple(skipped))

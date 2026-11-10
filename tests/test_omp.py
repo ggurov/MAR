@@ -27,6 +27,7 @@ from mar.omp import (
     status_line_extension,
     upsert_credential,
     upsert_env_key,
+    write_hindsight_settings,
     write_model_declarations,
     write_status_line,
     write_status_line_extension,
@@ -765,3 +766,44 @@ def test_write_model_declarations_rejects_non_mapping_file(tmp_path: Path) -> No
     (tmp_path / "models.yml").write_text("- just\n- a list\n", encoding="utf-8")
     with pytest.raises(OmpError):
         write_model_declarations(**_declaration(agent_dir=tmp_path))
+
+
+
+def test_write_hindsight_settings_disables_auto_retain(tmp_path: Path) -> None:
+    write_hindsight_settings(tmp_path)
+    config = yaml.safe_load((tmp_path / "config.yml").read_text(encoding="utf-8"))
+    assert config["hindsight"]["autoRetain"] is False
+
+
+def test_write_hindsight_settings_preserves_existing_entries(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text(
+        yaml.safe_dump({"hindsight": {"apiUrl": "http://hub.nj02.gurov.us:8888"}}),
+        encoding="utf-8",
+    )
+    write_hindsight_settings(tmp_path)
+    config = yaml.safe_load((tmp_path / "config.yml").read_text(encoding="utf-8"))
+    assert config["hindsight"] == {
+        "apiUrl": "http://hub.nj02.gurov.us:8888",
+        "autoRetain": False,
+    }
+
+
+def test_write_hindsight_settings_can_reenable(tmp_path: Path) -> None:
+    write_hindsight_settings(tmp_path, auto_retain=True)
+    config = yaml.safe_load((tmp_path / "config.yml").read_text(encoding="utf-8"))
+    assert config["hindsight"]["autoRetain"] is True
+
+
+def test_write_hindsight_settings_rejects_non_mapping_hindsight(tmp_path: Path) -> None:
+    (tmp_path / "config.yml").write_text(
+        yaml.safe_dump({"hindsight": "nope"}), encoding="utf-8"
+    )
+    with pytest.raises(OmpError):
+        write_hindsight_settings(tmp_path)
+
+
+def test_write_hindsight_settings_creates_missing_config(tmp_path: Path) -> None:
+    assert not (tmp_path / "config.yml").exists()
+    write_hindsight_settings(tmp_path)
+    config = yaml.safe_load((tmp_path / "config.yml").read_text(encoding="utf-8"))
+    assert config == {"hindsight": {"autoRetain": False}}
