@@ -965,7 +965,15 @@ def _cmd_pull(args: argparse.Namespace) -> int:
             old = reg.get(provider_id)
         except KeyError:
             old = None
-        else:
+        accounts: list[registry.Account] = []
+        if old is not None:
+            # omp only holds the credential it currently serves; for a
+            # multi-account subscription that is the selected alternate's
+            # key, which must not overwrite the subscription's own key.
+            if old.accounts:
+                key, accounts = registry.merge_pulled_key(old, key)
+            else:
+                accounts = old.accounts
             reg.remove(provider_id)
         reg.add(
             registry.Subscription(
@@ -978,7 +986,7 @@ def _cmd_pull(args: argparse.Namespace) -> int:
                 status=old.status if old else "active",
                 notes=notes,
                 expires_at_ms=expires_ms,
-                accounts=old.accounts if old else [],
+                accounts=accounts,
                 selected_account=old.selected_account if old else "",
             )
         )
