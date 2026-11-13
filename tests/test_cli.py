@@ -812,6 +812,76 @@ class TestPull:
         assert sub["default_model"] == "glm-4.7"
         assert sub["models"] == ["glm-4.7"]
 
+    @pytest.fixture()
+    def account_env_agent(self, tmp_path):
+        """omp .env as mar export writes it for a multi-account provider:
+        only the selected account's key, under the provider env var."""
+        agent_dir = tmp_path / "account-agent"
+        agent_dir.mkdir()
+        (agent_dir / ".env").write_text(
+            "COMMAND_CODE_API_KEY=goat-key-1234567890\n", encoding="utf-8"
+        )
+        return agent_dir
+
+    def setup_commandcode_accounts(self, reg_path):
+        """Registry with a primary key plus the selected gurovgoat2 account."""
+        run(reg_path, "add", "commandcode", "--key", "orig-key-1234567890")
+        run(
+            reg_path,
+            "account",
+            "add",
+            "commandcode",
+            "gurovgoat2",
+            "--key",
+            "goat-key-1234567890",
+        )
+        run(reg_path, "account", "select", "commandcode", "gurovgoat2")
+
+    def commandcode_sub(self, reg_path):
+        data = json.loads(reg_path.read_text(encoding="utf-8"))
+        return next(
+            s for s in data["subscriptions"] if s["provider"] == "commandcode"
+        )
+
+    def test_pull_env_keeps_primary_key_when_env_holds_selected_account(
+        self, reg_path, account_env_agent
+    ):
+        """mar pull must not copy the served account key into the primary slot.
+
+        Duplicate keys collapse in tokenpool routing, so both accounts would
+        show one billing account's usage.
+        """
+        self.setup_commandcode_accounts(reg_path)
+        assert run(reg_path, "pull", "--agent-dir", str(account_env_agent)) == 0
+        sub = self.commandcode_sub(reg_path)
+        assert sub["key"] == "orig-key-1234567890"
+        assert sub["selected_account"] == "gurovgoat2"
+        assert [a["key"] for a in sub["accounts"]] == ["goat-key-1234567890"]
+
+    def test_pull_env_rotates_only_the_selected_account(
+        self, reg_path, account_env_agent
+    ):
+        """A changed env key under a selected account is that account's rotation."""
+        self.setup_commandcode_accounts(reg_path)
+        (account_env_agent / ".env").write_text(
+            "COMMAND_CODE_API_KEY=goat-key-rotated-9876\n", encoding="utf-8"
+        )
+        assert run(reg_path, "pull", "--agent-dir", str(account_env_agent)) == 0
+        sub = self.commandcode_sub(reg_path)
+        assert sub["key"] == "orig-key-1234567890"
+        assert [a["key"] for a in sub["accounts"]] == ["goat-key-rotated-9876"]
+
+    def test_pull_env_stale_account_key_never_overwrites_primary(
+        self, reg_path, account_env_agent
+    ):
+        """With 'original' selected, a stale alternate key is not a rotation."""
+        self.setup_commandcode_accounts(reg_path)
+        run(reg_path, "account", "select", "commandcode", "original")
+        assert run(reg_path, "pull", "--agent-dir", str(account_env_agent)) == 0
+        sub = self.commandcode_sub(reg_path)
+        assert sub["key"] == "orig-key-1234567890"
+        assert [a["key"] for a in sub["accounts"]] == ["goat-key-1234567890"]
+
     def test_pull_no_credentials_names_both_sources(self, reg_path, tmp_path, capsys):
         empty = tmp_path / "empty-agent"
         empty.mkdir()

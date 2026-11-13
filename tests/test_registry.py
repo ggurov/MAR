@@ -304,7 +304,7 @@ def test_explicit_path_beats_env(tmp_path, monkeypatch):
 
 # --- alternate accounts (multi-key per provider) ----------------------------
 
-from mar.registry import PRIMARY_ACCOUNT, Account, effective_key
+from mar.registry import PRIMARY_ACCOUNT, Account, effective_key, merge_pulled_key
 
 ALT_KEY = "test-alt-key-0123456789"
 
@@ -424,6 +424,86 @@ def test_accounts_round_trip_through_v2_registry(tmp_path):
     stored = reloaded.get("zai")
     assert stored.accounts == [Account(name="joesacct1", key=ALT_KEY)]
     assert effective_key(stored) == ALT_KEY
+
+
+ALT2_KEY = "test-alt-key-2-0123456789"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "pulled", "expected_key", "expected_alts"),
+    [
+        # No alternate accounts: the pulled credential is the primary key.
+        ({}, "test-new-key-0123456789", "test-new-key-0123456789", []),
+        # omp's .env carries the selected account's key (mar export writes
+        # effective_key), so a pull must leave the primary key alone.
+        (
+            {
+                "accounts": [Account(name="gurovgoat2", key=ALT_KEY)],
+                "selected_account": "gurovgoat2",
+            },
+            ALT_KEY,
+            FAKE_KEY,
+            [ALT_KEY],
+        ),
+        # A rotated selected-account key updates that account, not the primary.
+        (
+            {
+                "accounts": [Account(name="gurovgoat2", key=ALT_KEY)],
+                "selected_account": "gurovgoat2",
+            },
+            "test-rotated-0123456789",
+            FAKE_KEY,
+            ["test-rotated-0123456789"],
+        ),
+        # Stale .env holding an alternate's key never overwrites the primary,
+        # even when the primary is the selected one: duplicate keys collapse
+        # in tokenpool routing and both accounts show the same usage.
+        (
+            {"accounts": [Account(name="gurovgoat2", key=ALT_KEY)]},
+            ALT_KEY,
+            FAKE_KEY,
+            [ALT_KEY],
+        ),
+        # A different key with the primary selected is a genuine rotation.
+        (
+            {"accounts": [Account(name="gurovgoat2", key=ALT_KEY)]},
+            "test-new-primary-0123456789",
+            "test-new-primary-0123456789",
+            [ALT_KEY],
+        ),
+        # A key matching another account must not be copied onto the selected
+        # account either.
+        (
+            {
+                "accounts": [
+                    Account(name="gurovgoat2", key=ALT_KEY),
+                    Account(name="other", key=ALT2_KEY),
+                ],
+                "selected_account": "gurovgoat2",
+            },
+            ALT2_KEY,
+            FAKE_KEY,
+            [ALT_KEY, ALT2_KEY],
+        ),
+    ],
+)
+def test_merge_pulled_key_never_duplicates_a_credential(
+    overrides, pulled, expected_key, expected_alts
+):
+    """A pulled credential updates at most the slot omp actually serves."""
+    stored = sub(**overrides)
+    key, accounts = merge_pulled_key(stored, pulled)
+    assert key == expected_key
+    assert [a.key for a in accounts] == expected_alts
+    assert key not in expected_alts
+    assert stored.key == FAKE_KEY  # the input subscription is not mutated
+
+
+@pytest.mark.parametrize("pulled", ["", "   "])
+def test_merge_pulled_key_rejects_blank_key(pulled):
+    """An empty pulled credential is an error, never a key wipe."""
+    with pytest.raises(RegistryError, match="key"):
+        merge_pulled_key(sub(), pulled)
 
 
 def test_load_legacy_v1_registry_without_accounts(tmp_path):

@@ -298,6 +298,14 @@ with `credential_type = 'oauth'` and JSON payload
   map back to providers (`omp_env_var` / `export_env_var` → `api_key`,
   `export_oauth_env_var` → `oauth`); `agent.db` OAuth rows win because
   they carry refresh metadata.
+- `mar pull` merges, it does not overwrite, when the registry already holds
+  alternate accounts (`registry.merge_pulled_key`). omp's `.env`/`agent.db`
+  only carry the credential omp *serves* — `mar export` writes
+  `effective_key`, i.e. the selected account's key — so a pulled key that
+  matches a stored account updates that account (or is a no-op) and never
+  replaces the subscription's own key. Without this, one key would be
+  stored twice; key-deduping consumers (tokenpool routing) collapse the
+  duplicate and every account row reports the same billing usage.
 - `mar export` emits OAuth subs as `export_oauth_env_var` lines:
   `ANTHROPIC_OAUTH_TOKEN`, `OPENAI_CODEX_OAUTH_TOKEN` (documented omp env
   routes). omp on the target machine reads them from `.env` but CANNOT

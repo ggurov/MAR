@@ -168,6 +168,58 @@ def effective_key(sub: Subscription) -> str | None:
     )
 
 
+def merge_pulled_key(sub: Subscription, key: str) -> tuple[str, list[Account]]:
+    """Merge a credential pulled from a local omp install into a subscription.
+
+    ``mar pull`` can only see the credential omp currently serves: for a
+    multi-account subscription ``.env``/``agent.db`` carry the selected
+    account's key (``mar export`` writes :func:`effective_key`), not the
+    subscription's own key. Copying it into the primary slot would store one
+    credential twice; key-based consumers such as tokenpool then deduplicate
+    the accounts and every row reports the same billing account.
+
+    Args:
+        sub: Existing subscription being refreshed (never mutated).
+        key: Nonblank credential read from omp.
+
+    Returns:
+        ``(primary_key, accounts)`` after the merge. The pulled key becomes
+        the primary key only when the subscription has no alternate accounts
+        or the primary is selected and the value matches no stored account.
+        When an alternate is selected, a differing key that matches no other
+        slot replaces that account's key. A key already present anywhere in
+        the subscription leaves it unchanged.
+
+    Raises:
+        RegistryError: If ``key`` is blank or ``selected_account`` names no
+            stored account (possible only in a hand-edited registry).
+    """
+    if not isinstance(key, str) or not key.strip():
+        raise RegistryError("pulled key must be a non-empty string")
+    accounts = list(sub.accounts)
+    if not accounts:
+        return key, accounts
+    known = {account.key for account in accounts}
+    if sub.selected_account:
+        names = {account.name for account in accounts}
+        if sub.selected_account not in names:
+            raise RegistryError(
+                f"provider {sub.provider!r} selects unknown account "
+                f"{sub.selected_account!r}; run: mar account select "
+                f"{sub.provider} original"
+            )
+        if key == sub.key or key in known:
+            return sub.key, accounts
+        merged = [
+            replace(account, key=key) if account.name == sub.selected_account else account
+            for account in accounts
+        ]
+        return sub.key, merged
+    if key in known:
+        return sub.key, accounts
+    return key, accounts
+
+
 def _validate(sub: Subscription) -> None:
     """Validate field rules for a subscription about to be stored.
 
