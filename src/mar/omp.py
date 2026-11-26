@@ -709,12 +709,15 @@ export default function (pi) {
 
     const modelGlyph = model => {
         const theme = current.ui.theme;
-        if (!theme) return "";
-        if (!model.thinking) return theme.icon.model || "";
+        if (!theme || !theme.symbols) return "";
+        const symbol = name => theme.symbols.symbol(name) || "";
+        const fallback = theme.symbols.icon("model") || "";
+        if (!model.thinking) return fallback;
         const level = pi.getThinkingLevel();
-        if (!level || level === "off") return theme.status.disabled || "";
-        const display = theme.thinking && theme.thinking[level];
-        return display ? display.split(" ")[0] : theme.icon.model || "";
+        if (!level) return fallback;
+        if (level === "off") return symbol("status.disabled");
+        const display = symbol(`thinking.${level === "auto" ? "autoPending" : level}`);
+        return display ? display.split(" ")[0] : fallback;
     };
 
     const render = () => {
