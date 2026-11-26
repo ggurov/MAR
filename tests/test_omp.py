@@ -418,7 +418,10 @@ def test_status_line_extension_renders_provider_and_api_id() -> None:
     assert 'model.provider + "/" + model.id' in source
     assert "pi.getThinkingLevel()" in source
     assert "modelGlyph" in source
-    assert "theme.icon.model" in source
+    assert 'theme.symbols.icon("model")' in source
+    assert "theme.symbols.symbol" in source
+    assert "theme.icon" not in source
+    assert "theme.thinking" not in source
     assert 'placement: "aboveEditor"' in source
 
 
@@ -445,9 +448,15 @@ const ctx = {
     get model() { return model; },
     ui: {
         theme: {
-            icon: { model: "M" },
-            status: { disabled: "o" },
-            thinking: { high: "H high" },
+            symbols: {
+                icon(name) { return name === "model" ? "M" : ""; },
+                symbol(name) {
+                    if (name === "status.disabled") return "o";
+                    if (name === "thinking.high") return "H high";
+                    if (name === "thinking.autoPending") return "A auto";
+                    return "";
+                },
+            },
         },
         setWidget(_key, lines) { widgets.push(lines.join("\\n")); },
     },
@@ -472,6 +481,12 @@ thinking = "high";
 await new Promise(resolve => setTimeout(resolve, 400));
 if (widgets.at(-1) !== "H openai/gpt-luna-6") {
     console.error(`widget did not follow the model switch: ${widgets.at(-1)}`);
+    process.exit(1);
+}
+thinking = "auto";
+await new Promise(resolve => setTimeout(resolve, 400));
+if (widgets.at(-1) !== "A openai/gpt-luna-6") {
+    console.error(`auto thinking glyph wrong: ${widgets.at(-1)}`);
     process.exit(1);
 }
 const subWidgets = [];
